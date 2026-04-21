@@ -60,8 +60,8 @@ export const getMinioStorageOptions = (
   endPoint: configService.get<string>('MINIO_ENDPOINT', 'localhost'),
   port: configService.get<number>('MINIO_PORT', 9000),
   useSSL: configService.get<boolean>('MINIO_USE_SSL', false),
-  accessKey: configService.get<string>('MINIO_ACCESS_KEY', 'minioadmin'),
-  secretKey: configService.get<string>('MINIO_SECRET_KEY', 'minioadmin'),
+  accessKey: configService.get<string>('MINIO_ACCESS_KEY', 'admin'),
+  secretKey: configService.get<string>('MINIO_SECRET_KEY', 'admin123'),
   rawBucket: configService.get<string>('MINIO_RAW_BUCKET', 'media-raw'),
   processedBucket: configService.get<string>(
     'MINIO_PROCESSED_BUCKET',

@@ -1,4 +1,5 @@
 import { FfmpegTranscoderService } from './ffmpeg-transcoder.service';
+import ffmpeg from 'fluent-ffmpeg';
 
 const ffmpegRun = jest.fn();
 const ffmpegOutput = jest.fn();
@@ -9,17 +10,22 @@ jest.mock('node:fs/promises', () => ({
 }));
 
 jest.mock('fluent-ffmpeg', () => {
-  return jest.fn(() => ({
+  const fluentFfmpeg = jest.fn(() => ({
     outputOptions: ffmpegOutputOptions,
     output: ffmpegOutput,
     on: ffmpegOn,
     run: ffmpegRun,
   }));
+
+  fluentFfmpeg.setFfmpegPath = jest.fn();
+
+  return fluentFfmpeg;
 });
 
 describe('FfmpegTranscoderService', () => {
   beforeEach(() => {
     ffmpegRun.mockReset();
+    jest.mocked(ffmpeg.setFfmpegPath).mockReset();
     ffmpegOutput.mockReset();
     ffmpegOutputOptions.mockReset();
     ffmpegOn.mockReset();
@@ -40,7 +46,9 @@ describe('FfmpegTranscoderService', () => {
         run: ffmpegRun,
       };
     });
-    const service = new FfmpegTranscoderService();
+    const service = new FfmpegTranscoderService({
+      get: jest.fn().mockReturnValue(''),
+    });
 
     await service.convertMp4ToHls720p({
       inputPath: '/tmp/input.mp4',
@@ -76,7 +84,9 @@ describe('FfmpegTranscoderService', () => {
         };
       },
     );
-    const service = new FfmpegTranscoderService();
+    const service = new FfmpegTranscoderService({
+      get: jest.fn().mockReturnValue(''),
+    });
 
     await expect(
       service.convertMp4ToHls720p({
@@ -86,5 +96,15 @@ describe('FfmpegTranscoderService', () => {
         segmentPattern: '/tmp/hls/720p_%03d.ts',
       }),
     ).rejects.toThrow('ffmpeg failed');
+  });
+
+  it('uses configured ffmpeg binary path when provided', () => {
+    new FfmpegTranscoderService({
+      get: jest.fn().mockReturnValue('C:\\ffmpeg\\bin\\ffmpeg.exe'),
+    });
+
+    expect(ffmpeg.setFfmpegPath).toHaveBeenCalledWith(
+      'C:\\ffmpeg\\bin\\ffmpeg.exe',
+    );
   });
 });

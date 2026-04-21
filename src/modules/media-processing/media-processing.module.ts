@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ClientsModule, Transport } from '@nestjs/microservices';
+import { Partitioners } from 'kafkajs';
 import { ConfigModule } from '../../shared/infrastructure/config/config.module';
 import { ConfigService } from '../../shared/infrastructure/config/config.service';
 import {
@@ -28,6 +29,9 @@ import { MinioStorageService } from './infrastructure/storage/minio-storage.serv
             client: {
               clientId: 'media-processing-service',
               brokers: getKafkaBrokers(configService),
+            },
+            producer: {
+              createPartitioner: Partitioners.LegacyPartitioner,
             },
             producerOnlyMode: true,
           },

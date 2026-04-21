@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import ffmpeg from 'fluent-ffmpeg';
 import { mkdir } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
+import { ConfigService } from '../../../../shared/infrastructure/config/config.service';
 
 export interface Hls720pTranscodeInput {
   inputPath: string;
@@ -16,6 +17,14 @@ export interface Hls720pTranscodeResult {
 
 @Injectable()
 export class FfmpegTranscoderService {
+  constructor(private readonly configService: ConfigService) {
+    const ffmpegPath = this.configService.get<string>('FFMPEG_PATH', '');
+
+    if (ffmpegPath.length > 0) {
+      ffmpeg.setFfmpegPath(ffmpegPath);
+    }
+  }
+
   async convertMp4ToHls720p(
     input: Hls720pTranscodeInput,
   ): Promise<Hls720pTranscodeResult> {
