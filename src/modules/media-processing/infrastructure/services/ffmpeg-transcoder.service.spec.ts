@@ -1,13 +1,16 @@
-import { FfmpegTranscoderService } from './ffmpeg-transcoder.service';
 import ffmpeg from 'fluent-ffmpeg';
+import { FfmpegTranscoderService } from './ffmpeg-transcoder.service';
 
 const ffmpegRun = jest.fn();
 const ffmpegOutput = jest.fn();
 const ffmpegOutputOptions = jest.fn();
 const ffmpegOn = jest.fn();
+const writeFileMock = jest.fn().mockResolvedValue(undefined);
 var ffprobeMock: jest.Mock;
+
 jest.mock('node:fs/promises', () => ({
   mkdir: jest.fn().mockResolvedValue(undefined),
+  writeFile: (...args: unknown[]) => writeFileMock(...args),
 }));
 
 jest.mock('fluent-ffmpeg', () => {
@@ -33,22 +36,36 @@ describe('FfmpegTranscoderService', () => {
     ffmpegOutputOptions.mockReset();
     ffmpegOn.mockReset();
     ffprobeMock.mockReset();
+    writeFileMock.mockReset();
+    writeFileMock.mockResolvedValue(undefined);
     ffmpegOutputOptions.mockReturnThis();
     ffmpegOutput.mockReturnThis();
     ffmpegOn.mockReturnThis();
   });
 
-  it('builds 720p HLS ffmpeg command and resolves on end', async () => {
+  it('probes metadata and transcodes requested variants', async () => {
+    let ffprobeCallCount = 0;
     ffprobeMock.mockImplementation(
       (
         _inputPath: string,
         callback: (
           error: Error | undefined,
-          data?: { streams?: Array<{ codec_type?: string }> },
+          data?: {
+            format?: { duration?: number };
+            streams?: Array<{ codec_type?: string; height?: number }>;
+          },
         ) => void,
       ) => {
+        ffprobeCallCount += 1;
         callback(undefined, {
-          streams: [{ codec_type: 'video' }, { codec_type: 'audio' }],
+          format: { duration: 42.2 },
+          streams:
+            ffprobeCallCount === 1
+              ? [{ codec_type: 'video', height: 1080 }, { codec_type: 'audio' }]
+              : [
+                  { codec_type: 'video', height: 1080 },
+                  { codec_type: 'audio' },
+                ],
         });
       },
     );
@@ -67,24 +84,46 @@ describe('FfmpegTranscoderService', () => {
       get: jest.fn().mockReturnValue(''),
     });
 
-    await service.convertMp4ToHls720p({
+    const result = await service.transcodeToHlsVariants({
       inputPath: '/tmp/input.mp4',
-      masterPlaylistPath: '/tmp/hls/master.m3u8',
-      variantPlaylistPath: '/tmp/hls/720p.m3u8',
-      segmentPattern: '/tmp/hls/720p_%03d.ts',
+      outputDirectory: '/tmp/hls',
+      resolutions: ['480p', '1080p'],
     });
 
-    expect(ffmpegOutputOptions).toHaveBeenCalledWith(
+    expect(ffmpegOutput.mock.calls[0]?.[0]).toEqual(
+      expect.stringContaining('480p.m3u8'),
+    );
+    expect(ffmpegOutput.mock.calls[1]?.[0]).toEqual(
+      expect.stringContaining('1080p.m3u8'),
+    );
+    expect(ffmpegOutputOptions.mock.calls[0]?.[0]).toEqual(
       expect.arrayContaining([
-        '-s:v:0 1280x720',
+        '-map 0:a:0',
         '-hls_segment_filename',
-        '/tmp/hls/720p_%03d.ts',
-        '-master_pl_name',
-        'master.m3u8',
+        expect.stringContaining('480p_%03d.ts'),
       ]),
     );
-    expect(ffmpegOutput).toHaveBeenCalledWith('/tmp/hls/720p.m3u8');
-    expect(ffmpegRun).toHaveBeenCalledTimes(1);
+    expect(ffmpegOutputOptions.mock.calls[1]?.[0]).toEqual(
+      expect.arrayContaining([
+        '-map 0:a:0',
+        '-hls_segment_filename',
+        expect.stringContaining('1080p_%03d.ts'),
+      ]),
+    );
+    expect(writeFileMock).toHaveBeenCalledWith(
+      expect.stringContaining('master.m3u8'),
+      expect.stringContaining('480p.m3u8'),
+      'utf8',
+    );
+    expect(writeFileMock).toHaveBeenCalledWith(
+      expect.stringContaining('master.m3u8'),
+      expect.stringContaining('1080p.m3u8'),
+      'utf8',
+    );
+    expect(result).toEqual({
+      durationSeconds: 42,
+      resolutions: ['480p', '1080p'],
+    });
   });
 
   it('builds HLS command without audio mapping when input has no audio stream', async () => {
@@ -93,11 +132,15 @@ describe('FfmpegTranscoderService', () => {
         _inputPath: string,
         callback: (
           error: Error | undefined,
-          data?: { streams?: Array<{ codec_type?: string }> },
+          data?: {
+            format?: { duration?: number };
+            streams?: Array<{ codec_type?: string; height?: number }>;
+          },
         ) => void,
       ) => {
         callback(undefined, {
-          streams: [{ codec_type: 'video' }],
+          format: { duration: 10 },
+          streams: [{ codec_type: 'video', height: 720 }],
         });
       },
     );
@@ -116,18 +159,15 @@ describe('FfmpegTranscoderService', () => {
       get: jest.fn().mockReturnValue(''),
     });
 
-    await service.convertMp4ToHls720p({
+    await service.transcodeToHlsVariants({
       inputPath: '/tmp/input.mp4',
-      masterPlaylistPath: '/tmp/hls/master.m3u8',
-      variantPlaylistPath: '/tmp/hls/720p.m3u8',
-      segmentPattern: '/tmp/hls/720p_%03d.ts',
+      outputDirectory: '/tmp/hls',
+      resolutions: ['720p'],
     });
 
     const outputOptions = ffmpegOutputOptions.mock.calls[0]?.[0] as string[];
 
-    expect(outputOptions).toEqual(
-      expect.arrayContaining(['-var_stream_map', 'v:0,name:720p']),
-    );
+    expect(outputOptions).toContain('-an');
     expect(outputOptions).not.toContain('-map 0:a:0');
   });
 
@@ -137,11 +177,18 @@ describe('FfmpegTranscoderService', () => {
         _inputPath: string,
         callback: (
           error: Error | undefined,
-          data?: { streams?: Array<{ codec_type?: string }> },
+          data?: {
+            format?: { duration?: number };
+            streams?: Array<{ codec_type?: string; height?: number }>;
+          },
         ) => void,
       ) => {
         callback(undefined, {
-          streams: [{ codec_type: 'video' }, { codec_type: 'audio' }],
+          format: { duration: 10 },
+          streams: [
+            { codec_type: 'video', height: 720 },
+            { codec_type: 'audio' },
+          ],
         });
       },
     );
@@ -163,11 +210,10 @@ describe('FfmpegTranscoderService', () => {
     });
 
     await expect(
-      service.convertMp4ToHls720p({
+      service.transcodeToHlsVariants({
         inputPath: '/tmp/input.mp4',
-        masterPlaylistPath: '/tmp/hls/master.m3u8',
-        variantPlaylistPath: '/tmp/hls/720p.m3u8',
-        segmentPattern: '/tmp/hls/720p_%03d.ts',
+        outputDirectory: '/tmp/hls',
+        resolutions: ['720p'],
       }),
     ).rejects.toThrow('ffmpeg failed');
   });

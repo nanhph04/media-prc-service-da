@@ -20,4 +20,8 @@ export class ConfigService {
 
     return value as T;
   }
+
+  getMaxVideoDurationSeconds(): number {
+    return this.get<number>('VIDEO_MAX_DURATION_SECONDS', 4 * 60 * 60);
+  }
 }

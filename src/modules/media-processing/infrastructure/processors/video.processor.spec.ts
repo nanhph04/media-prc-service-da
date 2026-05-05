@@ -1,20 +1,22 @@
 import type { Job } from 'bullmq';
-import { VideoProcessor } from './video.processor';
-import type { VideoProcessingJobData } from '../../application/dtos/video-processing-job-data.dto';
 import { ConfigService } from '../../../../shared/infrastructure/config/config.service';
+import type { VideoProcessingJobData } from '../../application/dtos/video-processing-job-data.dto';
 import { TRANSCODE_JOB_NAME } from '../config/media-processing.config';
-import type { FfmpegTranscoderService } from '../services/ffmpeg-transcoder.service';
 import type { KafkaEventPublisher } from '../messaging/kafka-event-publisher';
+import { VideoProcessor } from './video.processor';
+import type { FfmpegTranscoderService } from '../services/ffmpeg-transcoder.service';
 import type { MinioStorageService } from '../storage/minio-storage.service';
 
 describe('VideoProcessor', () => {
-  const createJob = (): Job<VideoProcessingJobData> =>
+  const createJob = (
+    resolution: string[] = ['720p'],
+  ): Job<VideoProcessingJobData> =>
     ({
       name: TRANSCODE_JOB_NAME,
       data: {
         videoId: 'video-123',
         rawFileKey: 'uploads/raw/channel-123/video.mp4',
-        resolution: ['720p'],
+        resolution,
         userId: 'user-123',
         traceId: 'trace-123',
       },
@@ -31,7 +33,7 @@ describe('VideoProcessor', () => {
       downloadRawVideo: jest.fn().mockResolvedValue('/tmp/video-123/input.mp4'),
       uploadHlsOutput: jest.fn().mockResolvedValue({
         masterPlaylistKey: 'processed/video-123/master.m3u8',
-        resolution: ['720p'],
+        resolution: ['480p', '720p'],
       }),
       cleanupLocalDirectory: jest.fn().mockResolvedValue(undefined),
       createWorkPaths: jest.fn().mockReturnValue({
@@ -39,24 +41,36 @@ describe('VideoProcessor', () => {
         inputPath: '/tmp/video-123/input.mp4',
         outputDirectory: '/tmp/video-123/hls',
         masterPlaylistPath: '/tmp/video-123/hls/master.m3u8',
-        variantPlaylistPath: '/tmp/video-123/hls/720p.m3u8',
-        segmentPattern: '/tmp/video-123/hls/720p_%03d.ts',
       }),
     } as unknown as jest.Mocked<MinioStorageService>,
     transcoderService: {
-      convertMp4ToHls720p: jest.fn().mockResolvedValue({ durationSeconds: 42 }),
+      probeVideoMetadata: jest.fn().mockResolvedValue({
+        durationSeconds: 42,
+        sourceHeight: 720,
+        hasAudioStream: true,
+      }),
+      transcodeToHlsVariants: jest.fn().mockResolvedValue({
+        durationSeconds: 42,
+        resolutions: ['480p', '720p'],
+      }),
     } as unknown as jest.Mocked<FfmpegTranscoderService>,
     eventPublisher: {
       publishVideoProcessedFailed: jest.fn().mockResolvedValue(undefined),
       publishVideoProcessedSuccess: jest.fn().mockResolvedValue(undefined),
     } as unknown as jest.Mocked<KafkaEventPublisher>,
     configService: {
-      get: jest.fn(),
+      getMaxVideoDurationSeconds: jest.fn().mockReturnValue(4 * 60 * 60),
+      get: jest
+        .fn()
+        .mockImplementation(
+          (_key: string, defaultValue: string | number | boolean) =>
+            defaultValue,
+        ),
     } as unknown as jest.Mocked<ConfigService>,
   });
 
-  it('downloads, transcodes, uploads, publishes success, and cleans up', async () => {
-    const job = createJob();
+  it('downloads, probes, transcodes, uploads, publishes success, and cleans up', async () => {
+    const job = createJob(['480p', '1080p']);
     const { storageService, transcoderService, eventPublisher, configService } =
       createMocks();
     const processor = new VideoProcessor(
@@ -68,45 +82,46 @@ describe('VideoProcessor', () => {
 
     await processor.handleVideoProcessing(job);
 
-    expect(storageService.downloadRawVideo.mock.calls[0]).toEqual([
+    expect(storageService.downloadRawVideo).toHaveBeenCalledWith(
       'uploads/raw/channel-123/video.mp4',
       '/tmp/video-123/input.mp4',
-    ]);
-    expect(transcoderService.convertMp4ToHls720p.mock.calls[0]?.[0]).toEqual({
+    );
+    expect(transcoderService.probeVideoMetadata).toHaveBeenCalledWith(
+      '/tmp/video-123/input.mp4',
+    );
+    expect(transcoderService.transcodeToHlsVariants).toHaveBeenCalledWith({
       inputPath: '/tmp/video-123/input.mp4',
-      masterPlaylistPath: '/tmp/video-123/hls/master.m3u8',
-      variantPlaylistPath: '/tmp/video-123/hls/720p.m3u8',
-      segmentPattern: '/tmp/video-123/hls/720p_%03d.ts',
+      outputDirectory: '/tmp/video-123/hls',
+      resolutions: ['480p', '720p'],
     });
-    expect(storageService.uploadHlsOutput.mock.calls[0]).toEqual([
+    expect(storageService.uploadHlsOutput).toHaveBeenCalledWith(
       'video-123',
       '/tmp/video-123/hls',
-    ]);
-    expect(
-      eventPublisher.publishVideoProcessedSuccess.mock.calls[0]?.[0],
-    ).toEqual({
+      ['480p', '720p'],
+    );
+    expect(eventPublisher.publishVideoProcessedSuccess).toHaveBeenCalledWith({
       videoId: 'video-123',
       traceId: 'trace-123',
       masterPlaylistKey: 'processed/video-123/master.m3u8',
       durationSeconds: 42,
-      resolution: ['720p'],
+      resolution: ['480p', '720p'],
     });
-    expect(eventPublisher.publishVideoProcessedFailed.mock.calls).toHaveLength(
-      0,
-    );
+    expect(eventPublisher.publishVideoProcessedFailed).not.toHaveBeenCalled();
     expect((job.updateProgress as jest.Mock).mock.calls.at(-1)).toEqual([100]);
-    expect(storageService.cleanupLocalDirectory.mock.calls[0]).toEqual([
+    expect(storageService.cleanupLocalDirectory).toHaveBeenCalledWith(
       '/tmp/video-123',
-    ]);
+    );
   });
 
-  it('publishes failed event, rethrows, and cleans up when processing fails', async () => {
-    const job = createJob();
+  it('publishes failed event when source duration exceeds the limit', async () => {
+    const job = createJob(['1080p']);
     const { storageService, transcoderService, eventPublisher, configService } =
       createMocks();
-    transcoderService.convertMp4ToHls720p.mockRejectedValue(
-      new Error('ffmpeg failed'),
-    );
+    transcoderService.probeVideoMetadata.mockResolvedValue({
+      durationSeconds: 14401,
+      sourceHeight: 1080,
+      hasAudioStream: true,
+    });
     const processor = new VideoProcessor(
       storageService,
       transcoderService,
@@ -115,22 +130,44 @@ describe('VideoProcessor', () => {
     );
 
     await expect(processor.handleVideoProcessing(job)).rejects.toThrow(
-      'ffmpeg failed',
+      'Video duration exceeds maximum limit of 4 hours',
     );
 
-    expect(
-      eventPublisher.publishVideoProcessedFailed.mock.calls[0]?.[0],
-    ).toEqual({
+    expect(transcoderService.transcodeToHlsVariants).not.toHaveBeenCalled();
+    expect(eventPublisher.publishVideoProcessedFailed).toHaveBeenCalledWith({
       videoId: 'video-123',
       traceId: 'trace-123',
-      errorMessage: 'ffmpeg failed',
+      errorMessage: 'Video duration exceeds maximum limit of 4 hours',
     });
-    expect(eventPublisher.publishVideoProcessedSuccess.mock.calls).toHaveLength(
-      0,
+  });
+
+  it('publishes failed event when source is below minimum supported resolution', async () => {
+    const job = createJob(['480p']);
+    const { storageService, transcoderService, eventPublisher, configService } =
+      createMocks();
+    transcoderService.probeVideoMetadata.mockResolvedValue({
+      durationSeconds: 120,
+      sourceHeight: 360,
+      hasAudioStream: true,
+    });
+    const processor = new VideoProcessor(
+      storageService,
+      transcoderService,
+      eventPublisher,
+      configService,
     );
-    expect(storageService.cleanupLocalDirectory.mock.calls[0]).toEqual([
-      '/tmp/video-123',
-    ]);
+
+    await expect(processor.handleVideoProcessing(job)).rejects.toThrow(
+      'Video source resolution is lower than minimum supported 480p',
+    );
+
+    expect(transcoderService.transcodeToHlsVariants).not.toHaveBeenCalled();
+    expect(eventPublisher.publishVideoProcessedFailed).toHaveBeenCalledWith({
+      videoId: 'video-123',
+      traceId: 'trace-123',
+      errorMessage:
+        'Video source resolution is lower than minimum supported 480p',
+    });
   });
 
   it('skips unsupported job names without side effects', async () => {
@@ -149,13 +186,10 @@ describe('VideoProcessor', () => {
 
     await processor.handleVideoProcessing(job);
 
-    expect(storageService.downloadRawVideo.mock.calls).toHaveLength(0);
-    expect(transcoderService.convertMp4ToHls720p.mock.calls).toHaveLength(0);
-    expect(eventPublisher.publishVideoProcessedSuccess.mock.calls).toHaveLength(
-      0,
-    );
-    expect(eventPublisher.publishVideoProcessedFailed.mock.calls).toHaveLength(
-      0,
-    );
+    expect(storageService.downloadRawVideo).not.toHaveBeenCalled();
+    expect(transcoderService.probeVideoMetadata).not.toHaveBeenCalled();
+    expect(transcoderService.transcodeToHlsVariants).not.toHaveBeenCalled();
+    expect(eventPublisher.publishVideoProcessedSuccess).not.toHaveBeenCalled();
+    expect(eventPublisher.publishVideoProcessedFailed).not.toHaveBeenCalled();
   });
 });

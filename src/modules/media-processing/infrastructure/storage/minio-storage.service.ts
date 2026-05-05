@@ -2,6 +2,7 @@ import { Inject, Injectable, Optional } from '@nestjs/common';
 import { Client } from 'minio';
 import { mkdir, readdir, rm } from 'node:fs/promises';
 import { basename, dirname, join, relative } from 'node:path';
+import type { TranscodeResolutionName } from '../services/ffmpeg-transcoder.service';
 import {
   MINIO_STORAGE_OPTIONS,
   type MinioStorageOptions,
@@ -12,13 +13,11 @@ export interface VideoProcessingWorkPaths {
   inputPath: string;
   outputDirectory: string;
   masterPlaylistPath: string;
-  variantPlaylistPath: string;
-  segmentPattern: string;
 }
 
 export interface UploadedHlsOutput {
   masterPlaylistKey: string;
-  resolution: string[];
+  resolution: TranscodeResolutionName[];
 }
 
 @Injectable()
@@ -60,8 +59,6 @@ export class MinioStorageService {
       inputPath: join(workDirectory, 'input.mp4'),
       outputDirectory,
       masterPlaylistPath: join(outputDirectory, 'master.m3u8'),
-      variantPlaylistPath: join(outputDirectory, '720p.m3u8'),
-      segmentPattern: join(outputDirectory, 'segments', '720p_%03d.ts'),
     };
   }
 
@@ -81,6 +78,7 @@ export class MinioStorageService {
   async uploadHlsOutput(
     videoId: string,
     outputDirectory: string,
+    resolutions: TranscodeResolutionName[],
   ): Promise<UploadedHlsOutput> {
     const files = await this.listFiles(outputDirectory);
 
@@ -99,7 +97,7 @@ export class MinioStorageService {
 
     return {
       masterPlaylistKey: `processed/${videoId}/master.m3u8`,
-      resolution: ['720p'],
+      resolution: resolutions,
     };
   }
 

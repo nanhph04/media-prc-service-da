@@ -1,18 +1,57 @@
 import { Injectable } from '@nestjs/common';
 import ffmpeg from 'fluent-ffmpeg';
-import { mkdir } from 'node:fs/promises';
-import { basename, dirname } from 'node:path';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { ConfigService } from '../../../../shared/infrastructure/config/config.service';
 
-export interface Hls720pTranscodeInput {
-  inputPath: string;
-  masterPlaylistPath: string;
-  variantPlaylistPath: string;
-  segmentPattern: string;
+export const TRANSCODE_RESOLUTION_PRESETS = [
+  {
+    name: '480p',
+    width: 854,
+    height: 480,
+    videoBitrate: '1400k',
+    maxRate: '1498k',
+    bufferSize: '2100k',
+    bandwidth: 1400000,
+  },
+  {
+    name: '720p',
+    width: 1280,
+    height: 720,
+    videoBitrate: '2800k',
+    maxRate: '2996k',
+    bufferSize: '4200k',
+    bandwidth: 2800000,
+  },
+  {
+    name: '1080p',
+    width: 1920,
+    height: 1080,
+    videoBitrate: '5000k',
+    maxRate: '5350k',
+    bufferSize: '7500k',
+    bandwidth: 5000000,
+  },
+] as const;
+
+export type TranscodeResolutionName =
+  (typeof TRANSCODE_RESOLUTION_PRESETS)[number]['name'];
+
+export interface VideoProbeMetadata {
+  durationSeconds?: number;
+  sourceHeight?: number;
+  hasAudioStream: boolean;
 }
 
-export interface Hls720pTranscodeResult {
+export interface HlsVariantTranscodeInput {
+  inputPath: string;
+  outputDirectory: string;
+  resolutions: TranscodeResolutionName[];
+}
+
+export interface HlsVariantTranscodeResult {
   durationSeconds?: number;
+  resolutions: TranscodeResolutionName[];
 }
 
 @Injectable()
@@ -25,28 +64,97 @@ export class FfmpegTranscoderService {
     }
   }
 
-  async convertMp4ToHls720p(
-    input: Hls720pTranscodeInput,
-  ): Promise<Hls720pTranscodeResult> {
-    await mkdir(dirname(input.segmentPattern), { recursive: true });
-    const hasAudioStream = await this.probeHasAudioStream(input.inputPath);
+  async probeVideoMetadata(inputPath: string): Promise<VideoProbeMetadata> {
+    return new Promise<VideoProbeMetadata>((resolve, reject) => {
+      ffmpeg.ffprobe(
+        inputPath,
+        (
+          error: Error | undefined,
+          data?: {
+            format?: { duration?: number };
+            streams?: Array<{
+              codec_type?: string;
+              height?: number;
+            }>;
+          },
+        ) => {
+          if (error) {
+            reject(error);
+            return;
+          }
 
-    return new Promise<Hls720pTranscodeResult>((resolve, reject) => {
-      let durationSeconds: number | undefined;
+          const streams = data?.streams ?? [];
+          const videoStream = streams.find(
+            (stream) => stream.codec_type === 'video',
+          );
+          const durationSeconds = data?.format?.duration
+            ? Math.round(data.format.duration)
+            : undefined;
+
+          resolve({
+            durationSeconds,
+            sourceHeight: videoStream?.height,
+            hasAudioStream: streams.some(
+              (stream) => stream.codec_type === 'audio',
+            ),
+          });
+        },
+      );
+    });
+  }
+
+  async transcodeToHlsVariants(
+    input: HlsVariantTranscodeInput,
+  ): Promise<HlsVariantTranscodeResult> {
+    const metadata = await this.probeVideoMetadata(input.inputPath);
+    await mkdir(input.outputDirectory, { recursive: true });
+    await mkdir(join(input.outputDirectory, 'segments'), { recursive: true });
+
+    for (const resolutionName of input.resolutions) {
+      const preset = this.getPresetOrThrow(resolutionName);
+      await this.transcodeSingleVariant(
+        input.inputPath,
+        input.outputDirectory,
+        preset,
+        metadata.hasAudioStream,
+      );
+    }
+
+    await this.writeMasterPlaylist(input.outputDirectory, input.resolutions);
+
+    return {
+      durationSeconds: metadata.durationSeconds,
+      resolutions: input.resolutions,
+    };
+  }
+
+  private async transcodeSingleVariant(
+    inputPath: string,
+    outputDirectory: string,
+    preset: (typeof TRANSCODE_RESOLUTION_PRESETS)[number],
+    hasAudioStream: boolean,
+  ): Promise<void> {
+    const variantPlaylistPath = join(outputDirectory, `${preset.name}.m3u8`);
+    const segmentPattern = join(
+      outputDirectory,
+      'segments',
+      `${preset.name}_%03d.ts`,
+    );
+
+    await mkdir(dirname(segmentPattern), { recursive: true });
+
+    return new Promise<void>((resolve, reject) => {
       const stderrLines: string[] = [];
 
-      ffmpeg(input.inputPath)
+      ffmpeg(inputPath)
         .outputOptions(
-          this.buildOutputOptions(input, hasAudioStream),
+          this.buildOutputOptions(segmentPattern, preset, hasAudioStream),
         )
-        .output(input.variantPlaylistPath)
-        .on('codecData', (data: { duration?: string }) => {
-          durationSeconds = this.parseDurationSeconds(data.duration);
-        })
+        .output(variantPlaylistPath)
         .on('stderr', (line: string) => {
           stderrLines.push(line.trim());
         })
-        .on('end', () => resolve({ durationSeconds }))
+        .on('end', () => resolve())
         .on('error', (error: Error) => {
           const stderr = stderrLines.filter(Boolean).slice(-10).join('\n');
           const message =
@@ -58,7 +166,8 @@ export class FfmpegTranscoderService {
   }
 
   private buildOutputOptions(
-    input: Hls720pTranscodeInput,
+    segmentPattern: string,
+    preset: (typeof TRANSCODE_RESOLUTION_PRESETS)[number],
     hasAudioStream: boolean,
   ): string[] {
     const outputOptions = [
@@ -67,80 +176,58 @@ export class FfmpegTranscoderService {
       '-sc_threshold 0',
       '-map 0:v:0',
       '-c:v:0 h264',
-      '-b:v:0 2800k',
-      '-maxrate:v:0 2996k',
-      '-bufsize:v:0 4200k',
-      '-s:v:0 1280x720',
+      `-b:v:0 ${preset.videoBitrate}`,
+      `-maxrate:v:0 ${preset.maxRate}`,
+      `-bufsize:v:0 ${preset.bufferSize}`,
+      `-vf scale=w=${preset.width}:h=${preset.height}:force_original_aspect_ratio=decrease,pad=${preset.width}:${preset.height}:(ow-iw)/2:(oh-ih)/2`,
       '-f hls',
       '-hls_time 6',
       '-hls_playlist_type vod',
       '-hls_segment_filename',
-      input.segmentPattern,
-      '-master_pl_name',
-      basename(input.masterPlaylistPath),
+      segmentPattern,
     ];
 
     if (hasAudioStream) {
-      outputOptions.push(
-        '-map 0:a:0',
-        '-c:a:0 aac',
-        '-b:a:0 128k',
-        '-var_stream_map',
-        'v:0,a:0,name:720p',
-      );
+      outputOptions.push('-map 0:a:0', '-c:a:0 aac', '-b:a:0 128k');
     } else {
-      outputOptions.push('-var_stream_map', 'v:0,name:720p');
+      outputOptions.push('-an');
     }
 
     return outputOptions;
   }
 
-  private async probeHasAudioStream(inputPath: string): Promise<boolean> {
-    return new Promise<boolean>((resolve) => {
-      ffmpeg.ffprobe(
-        inputPath,
-        (
-          error: Error | undefined,
-          data?: {
-            streams?: Array<{ codec_type?: string }>;
-          },
-        ) => {
-          if (error) {
-            resolve(false);
-            return;
-          }
+  private async writeMasterPlaylist(
+    outputDirectory: string,
+    resolutions: TranscodeResolutionName[],
+  ): Promise<void> {
+    const lines = ['#EXTM3U', '#EXT-X-VERSION:3'];
 
-          const hasAudioStream =
-            data?.streams?.some((stream) => stream.codec_type === 'audio') ??
-            false;
-          resolve(hasAudioStream);
-        },
+    for (const resolutionName of resolutions) {
+      const preset = this.getPresetOrThrow(resolutionName);
+      lines.push(
+        `#EXT-X-STREAM-INF:BANDWIDTH=${preset.bandwidth},RESOLUTION=${preset.width}x${preset.height}`,
+        `${preset.name}.m3u8`,
       );
-    });
+    }
+
+    await writeFile(
+      join(outputDirectory, 'master.m3u8'),
+      `${lines.join('\n')}\n`,
+      'utf8',
+    );
   }
 
-  private parseDurationSeconds(duration?: string): number | undefined {
-    if (!duration) {
-      return undefined;
+  private getPresetOrThrow(
+    resolutionName: TranscodeResolutionName,
+  ): (typeof TRANSCODE_RESOLUTION_PRESETS)[number] {
+    const preset = TRANSCODE_RESOLUTION_PRESETS.find(
+      (candidate) => candidate.name === resolutionName,
+    );
+
+    if (!preset) {
+      throw new Error(`Unsupported resolution preset: ${resolutionName}`);
     }
 
-    const parts = duration.split(':');
-    if (parts.length !== 3) {
-      return undefined;
-    }
-
-    const hours = Number(parts[0]);
-    const minutes = Number(parts[1]);
-    const seconds = Number(parts[2]);
-
-    if (
-      !Number.isFinite(hours) ||
-      !Number.isFinite(minutes) ||
-      !Number.isFinite(seconds)
-    ) {
-      return undefined;
-    }
-
-    return Math.round(hours * 3600 + minutes * 60 + seconds);
+    return preset;
   }
 }

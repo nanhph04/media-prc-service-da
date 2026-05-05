@@ -12,7 +12,11 @@ import {
   TRANSCODE_JOB_NAME,
 } from '../config/media-processing.config';
 import { KafkaEventPublisher } from '../messaging/kafka-event-publisher';
-import { FfmpegTranscoderService } from '../services/ffmpeg-transcoder.service';
+import {
+  FfmpegTranscoderService,
+  TRANSCODE_RESOLUTION_PRESETS,
+  type TranscodeResolutionName,
+} from '../services/ffmpeg-transcoder.service';
 import { MinioStorageService } from '../storage/minio-storage.service';
 
 @Injectable()
@@ -61,19 +65,29 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
       await this.storageService.downloadRawVideo(rawFileKey, paths.inputPath);
       await job.updateProgress(15);
 
+      const metadata = await this.transcoderService.probeVideoMetadata(
+        paths.inputPath,
+      );
+      this.assertDurationWithinLimit(metadata.durationSeconds);
+      const normalizedResolutions = this.normalizeRequestedResolutions(
+        job.data.resolution,
+        metadata.sourceHeight,
+      );
       await job.updateProgress(35);
-      const transcodeResult = await this.transcoderService.convertMp4ToHls720p({
-        inputPath: paths.inputPath,
-        masterPlaylistPath: paths.masterPlaylistPath,
-        variantPlaylistPath: paths.variantPlaylistPath,
-        segmentPattern: paths.segmentPattern,
-      });
+
+      const transcodeResult =
+        await this.transcoderService.transcodeToHlsVariants({
+          inputPath: paths.inputPath,
+          outputDirectory: paths.outputDirectory,
+          resolutions: normalizedResolutions,
+        });
 
       await job.updateProgress(75);
 
       const uploadedOutput = await this.storageService.uploadHlsOutput(
         videoId,
         paths.outputDirectory,
+        transcodeResult.resolutions,
       );
 
       await job.updateProgress(90);
@@ -109,5 +123,64 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
     } finally {
       await this.storageService.cleanupLocalDirectory(paths.workDirectory);
     }
+  }
+
+  private assertDurationWithinLimit(durationSeconds?: number): void {
+    if (durationSeconds === undefined) {
+      return;
+    }
+
+    const maxDurationSeconds = this.configService.getMaxVideoDurationSeconds();
+    if (durationSeconds > maxDurationSeconds) {
+      throw new Error('Video duration exceeds maximum limit of 4 hours');
+    }
+  }
+
+  private normalizeRequestedResolutions(
+    requestedResolutions: string[],
+    sourceHeight?: number,
+  ): TranscodeResolutionName[] {
+    if (sourceHeight === undefined || sourceHeight < 480) {
+      throw new Error(
+        'Video source resolution is lower than minimum supported 480p',
+      );
+    }
+
+    const requestedHeights = requestedResolutions
+      .map((resolution) =>
+        TRANSCODE_RESOLUTION_PRESETS.find(
+          (preset) => preset.name === resolution,
+        ),
+      )
+      .filter(
+        (preset): preset is (typeof TRANSCODE_RESOLUTION_PRESETS)[number] =>
+          preset !== undefined,
+      )
+      .map((preset) => preset.height);
+
+    const normalizedResolutions = new Set<TranscodeResolutionName>();
+    for (const requestedHeight of requestedHeights) {
+      const targetPreset = [...TRANSCODE_RESOLUTION_PRESETS]
+        .reverse()
+        .find(
+          (preset) => preset.height <= Math.min(requestedHeight, sourceHeight),
+        );
+
+      if (targetPreset) {
+        normalizedResolutions.add(targetPreset.name);
+      }
+    }
+
+    const orderedResolutions = TRANSCODE_RESOLUTION_PRESETS.filter((preset) =>
+      normalizedResolutions.has(preset.name),
+    ).map((preset) => preset.name);
+
+    if (orderedResolutions.length === 0) {
+      throw new Error(
+        'Video source resolution is lower than minimum supported 480p',
+      );
+    }
+
+    return orderedResolutions;
   }
 }
