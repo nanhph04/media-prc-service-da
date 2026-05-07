@@ -57,6 +57,7 @@ describe('VideoProcessor', () => {
     eventPublisher: {
       publishVideoProcessedFailed: jest.fn().mockResolvedValue(undefined),
       publishVideoProcessedSuccess: jest.fn().mockResolvedValue(undefined),
+      publishVideoProgressUpdated: jest.fn().mockResolvedValue(undefined),
     } as unknown as jest.Mocked<KafkaEventPublisher>,
     configService: {
       getMaxVideoDurationSeconds: jest.fn().mockReturnValue(4 * 60 * 60),
@@ -106,6 +107,14 @@ describe('VideoProcessor', () => {
       durationSeconds: 42,
       resolution: ['480p', '720p'],
     });
+    expect(eventPublisher.publishVideoProgressUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({
+        videoId: 'video-123',
+        stage: 'completed',
+        percent: 100,
+        terminal: true,
+      }),
+    );
     expect(eventPublisher.publishVideoProcessedFailed).not.toHaveBeenCalled();
     expect((job.updateProgress as jest.Mock).mock.calls.at(-1)).toEqual([100]);
     expect(storageService.cleanupLocalDirectory).toHaveBeenCalledWith(
@@ -139,6 +148,12 @@ describe('VideoProcessor', () => {
       traceId: 'trace-123',
       errorMessage: 'Video duration exceeds maximum limit of 4 hours',
     });
+    expect(eventPublisher.publishVideoProgressUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: 'failed',
+        terminal: true,
+      }),
+    );
   });
 
   it('publishes failed event when source is below minimum supported resolution', async () => {
@@ -168,6 +183,12 @@ describe('VideoProcessor', () => {
       errorMessage:
         'Video source resolution is lower than minimum supported 480p',
     });
+    expect(eventPublisher.publishVideoProgressUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: 'failed',
+        terminal: true,
+      }),
+    );
   });
 
   it('skips unsupported job names without side effects', async () => {

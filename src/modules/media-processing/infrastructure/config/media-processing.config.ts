@@ -3,6 +3,7 @@ import { ConfigService } from '../../../../shared/infrastructure/config/config.s
 export interface KafkaEventPublisherOptions {
   successTopic: string;
   failedTopic: string;
+  progressTopic: string;
 }
 
 export interface MinioStorageOptions {
@@ -51,6 +52,10 @@ export const getKafkaEventPublisherOptions = (
   failedTopic: configService.get<string>(
     'KAFKA_VIDEO_PROCESSED_FAILED_TOPIC',
     'video.processed.failed',
+  ),
+  progressTopic: configService.get<string>(
+    'KAFKA_VIDEO_PROGRESS_UPDATED_TOPIC',
+    'video.progress.updated',
   ),
 });
 
