@@ -43,6 +43,10 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  isReady(): boolean {
+    return this.worker !== undefined;
+  }
+
   async onModuleDestroy(): Promise<void> {
     await this.worker?.close();
   }

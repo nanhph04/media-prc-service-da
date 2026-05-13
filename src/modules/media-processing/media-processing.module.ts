@@ -55,5 +55,6 @@ import { MinioStorageService } from './infrastructure/storage/minio-storage.serv
     MinioStorageService,
     VideoProcessor,
   ],
+  exports: [VideoProcessor],
 })
 export class MediaProcessingModule {}
