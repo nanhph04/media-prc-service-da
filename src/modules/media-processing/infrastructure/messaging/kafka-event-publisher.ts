@@ -1,6 +1,7 @@
 import {
   Inject,
   Injectable,
+  Logger,
   OnModuleDestroy,
   OnModuleInit,
   Optional,
@@ -35,6 +36,7 @@ export interface PublishVideoProgressUpdatedInput
 export class KafkaEventPublisher implements OnModuleInit, OnModuleDestroy {
   private static readonly MAX_RETRIES = 3;
 
+  private readonly logger = new Logger(KafkaEventPublisher.name);
   private readonly options: KafkaEventPublisherOptions;
 
   constructor(
@@ -53,10 +55,14 @@ export class KafkaEventPublisher implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit(): Promise<void> {
     await this.kafkaClient.connect();
+    this.logger.log(
+      `Kafka publisher connected | successTopic=${this.options.successTopic} | failedTopic=${this.options.failedTopic} | progressTopic=${this.options.progressTopic}`,
+    );
   }
 
   async onModuleDestroy(): Promise<void> {
     await this.kafkaClient.close();
+    this.logger.log('Kafka publisher closed');
   }
 
   async publishVideoProcessedSuccess(
@@ -79,7 +85,10 @@ export class KafkaEventPublisher implements OnModuleInit, OnModuleDestroy {
       },
     };
 
-    await this.publish(this.options.successTopic, event);
+    await this.publish(this.options.successTopic, event, {
+      kind: 'success',
+      videoId: input.videoId,
+    });
   }
 
   async publishVideoProcessedFailed(
@@ -99,7 +108,10 @@ export class KafkaEventPublisher implements OnModuleInit, OnModuleDestroy {
       },
     };
 
-    await this.publish(this.options.failedTopic, event);
+    await this.publish(this.options.failedTopic, event, {
+      kind: 'failed',
+      videoId: input.videoId,
+    });
   }
 
   async publishVideoProgressUpdated(
@@ -124,12 +136,20 @@ export class KafkaEventPublisher implements OnModuleInit, OnModuleDestroy {
       },
     };
 
-    await this.publish(this.options.progressTopic, event);
+    await this.publish(this.options.progressTopic, event, {
+      kind: 'progress',
+      videoId: input.videoId,
+      stage: input.stage,
+      percent: input.percent,
+      terminal: input.terminal,
+      message: input.message,
+    });
   }
 
   private async publish<T>(
     topic: string,
     event: IIntegrationEvent<T>,
+    meta: Record<string, unknown>,
   ): Promise<void> {
     let lastError: unknown;
 
@@ -139,10 +159,20 @@ export class KafkaEventPublisher implements OnModuleInit, OnModuleDestroy {
       attempt += 1
     ) {
       try {
+        this.logger.log(
+          `Publishing Kafka event | topic=${topic} | eventId=${event.eventId} | attempt=${attempt} | meta=${JSON.stringify(meta)}`,
+        );
         await lastValueFrom(this.kafkaClient.emit(topic, event));
+        this.logger.log(
+          `Published Kafka event | topic=${topic} | eventId=${event.eventId} | meta=${JSON.stringify(meta)}`,
+        );
         return;
       } catch (error: unknown) {
         lastError = error;
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.warn(
+          `Kafka publish failed | topic=${topic} | eventId=${event.eventId} | attempt=${attempt} | error=${message}`,
+        );
       }
     }
 

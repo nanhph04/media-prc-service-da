@@ -67,6 +67,7 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
         message: 'Video queued for processing',
         terminal: false,
       });
+      this.logProgress(videoId, 'queued', 5, false);
       this.logger.log(
         `Starting video processing for videoId=${videoId}, rawFileKey=${rawFileKey}`,
       );
@@ -82,6 +83,7 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
         message: 'Raw video downloaded',
         terminal: false,
       });
+      this.logProgress(videoId, 'downloading', 15, false);
 
       const metadata = await this.transcoderService.probeVideoMetadata(
         paths.inputPath,
@@ -101,6 +103,7 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
         message: 'Video metadata analyzed',
         terminal: false,
       });
+      this.logProgress(videoId, 'probing', 35, false);
 
       const transcodeResult =
         await this.transcoderService.transcodeToHlsVariants({
@@ -119,6 +122,7 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
         message: 'HLS variants created',
         terminal: false,
       });
+      this.logProgress(videoId, 'transcoding', 75, false);
 
       const uploadedOutput = await this.storageService.uploadHlsOutput(
         videoId,
@@ -136,6 +140,7 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
         message: 'Processed assets uploaded',
         terminal: false,
       });
+      this.logProgress(videoId, 'uploading', 90, false);
       await this.eventPublisher.publishVideoProgressUpdated({
         videoId,
         traceId,
@@ -145,6 +150,7 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
         message: 'Finalizing processing',
         terminal: false,
       });
+      this.logProgress(videoId, 'finalizing', 95, false);
       await this.eventPublisher.publishVideoProcessedSuccess({
         videoId,
         traceId,
@@ -162,6 +168,7 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
         message: 'Video processing completed',
         terminal: true,
       });
+      this.logProgress(videoId, 'completed', 100, true);
 
       this.logger.log(`Completed video processing for videoId=${videoId}`);
     } catch (error: unknown) {
@@ -191,6 +198,7 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
         terminal: true,
         errorMessage: message,
       });
+      this.logProgress(videoId, 'failed', 100, true);
 
       throw error;
     } finally {
@@ -255,5 +263,16 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
     }
 
     return orderedResolutions;
+  }
+
+  private logProgress(
+    videoId: string,
+    stage: string,
+    percent: number,
+    terminal: boolean,
+  ): void {
+    this.logger.log(
+      `Published processing progress for videoId=${videoId}, stage=${stage}, percent=${percent}, terminal=${terminal}`,
+    );
   }
 }
