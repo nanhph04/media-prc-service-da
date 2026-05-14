@@ -11,7 +11,6 @@ import { randomUUID } from 'node:crypto';
 import { lastValueFrom } from 'rxjs';
 import type { IIntegrationEvent } from '../../../../shared/domain/types/events/base-integration.event';
 import type { VideoProcessedFailedEventData } from '../../application/dtos/video-processed-failed.event-data';
-import type { VideoProgressUpdatedEventData } from '../../application/dtos/video-progress-updated.event-data';
 import type { VideoProcessedSuccessEventData } from '../../application/dtos/video-processed-success.event-data';
 import {
   KAFKA_EVENT_PUBLISHER_OPTIONS,
@@ -24,11 +23,6 @@ export interface PublishVideoProcessedSuccessInput extends VideoProcessedSuccess
 }
 
 export interface PublishVideoProcessedFailedInput extends VideoProcessedFailedEventData {
-  traceId?: string;
-}
-
-export interface PublishVideoProgressUpdatedInput
-  extends VideoProgressUpdatedEventData {
   traceId?: string;
 }
 
@@ -49,14 +43,13 @@ export class KafkaEventPublisher implements OnModuleInit, OnModuleDestroy {
     this.options = options ?? {
       successTopic: 'video.processed.success',
       failedTopic: 'video.processed.failed',
-      progressTopic: 'video.progress.updated',
     };
   }
 
   async onModuleInit(): Promise<void> {
     await this.kafkaClient.connect();
     this.logger.log(
-      `Kafka publisher connected | successTopic=${this.options.successTopic} | failedTopic=${this.options.failedTopic} | progressTopic=${this.options.progressTopic}`,
+      `Kafka publisher connected | successTopic=${this.options.successTopic} | failedTopic=${this.options.failedTopic}`,
     );
   }
 
@@ -111,38 +104,6 @@ export class KafkaEventPublisher implements OnModuleInit, OnModuleDestroy {
     await this.publish(this.options.failedTopic, event, {
       kind: 'failed',
       videoId: input.videoId,
-    });
-  }
-
-  async publishVideoProgressUpdated(
-    input: PublishVideoProgressUpdatedInput,
-  ): Promise<void> {
-    const event: IIntegrationEvent<VideoProgressUpdatedEventData> = {
-      eventId: randomUUID(),
-      eventType: this.options.progressTopic,
-      aggregateId: input.videoId,
-      timestamp: new Date().toISOString(),
-      version: 1,
-      traceId: input.traceId ?? randomUUID(),
-      sourceService: 'media-processing-service',
-      data: {
-        videoId: input.videoId,
-        pipeline: 'processing',
-        stage: input.stage,
-        percent: input.percent,
-        message: input.message,
-        terminal: input.terminal,
-        errorMessage: input.errorMessage,
-      },
-    };
-
-    await this.publish(this.options.progressTopic, event, {
-      kind: 'progress',
-      videoId: input.videoId,
-      stage: input.stage,
-      percent: input.percent,
-      terminal: input.terminal,
-      message: input.message,
     });
   }
 

@@ -14,7 +14,6 @@ describe('KafkaEventPublisher', () => {
       {
         successTopic: 'video.processed.success',
         failedTopic: 'video.processed.failed',
-        progressTopic: 'video.progress.updated',
       },
     );
 
@@ -53,7 +52,6 @@ describe('KafkaEventPublisher', () => {
       {
         successTopic: 'video.processed.success',
         failedTopic: 'video.processed.failed',
-        progressTopic: 'video.progress.updated',
       },
     );
 
@@ -76,43 +74,4 @@ describe('KafkaEventPublisher', () => {
     );
   });
 
-  it('publishes progress event to the shared progress topic', async () => {
-    const kafkaClient = createKafkaClient();
-    const publisher = new KafkaEventPublisher(
-      kafkaClient as unknown as ClientKafka,
-      {
-        successTopic: 'video.processed.success',
-        failedTopic: 'video.processed.failed',
-        progressTopic: 'video.progress.updated',
-      },
-    );
-
-    await publisher.publishVideoProgressUpdated({
-      videoId: 'video-123',
-      traceId: 'trace-123',
-      pipeline: 'processing',
-      stage: 'transcoding',
-      percent: 75,
-      message: 'HLS variants created',
-      terminal: false,
-    });
-
-    expect(kafkaClient.emit).toHaveBeenCalledWith(
-      'video.progress.updated',
-      expect.objectContaining({
-        eventType: 'video.progress.updated',
-        aggregateId: 'video-123',
-        traceId: 'trace-123',
-        data: {
-          videoId: 'video-123',
-          pipeline: 'processing',
-          stage: 'transcoding',
-          percent: 75,
-          message: 'HLS variants created',
-          terminal: false,
-          errorMessage: undefined,
-        },
-      }),
-    );
-  });
 });

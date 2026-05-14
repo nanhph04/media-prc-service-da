@@ -20,6 +20,8 @@ describe('VideoProcessor', () => {
         userId: 'user-123',
         traceId: 'trace-123',
       },
+      opts: { attempts: 3 },
+      attemptsMade: 0,
       updateProgress: jest.fn().mockResolvedValue(undefined),
     }) as unknown as Job<VideoProcessingJobData>;
 
@@ -57,7 +59,6 @@ describe('VideoProcessor', () => {
     eventPublisher: {
       publishVideoProcessedFailed: jest.fn().mockResolvedValue(undefined),
       publishVideoProcessedSuccess: jest.fn().mockResolvedValue(undefined),
-      publishVideoProgressUpdated: jest.fn().mockResolvedValue(undefined),
     } as unknown as jest.Mocked<KafkaEventPublisher>,
     configService: {
       getMaxVideoDurationSeconds: jest.fn().mockReturnValue(4 * 60 * 60),
@@ -107,14 +108,6 @@ describe('VideoProcessor', () => {
       durationSeconds: 42,
       resolution: ['480p', '720p'],
     });
-    expect(eventPublisher.publishVideoProgressUpdated).toHaveBeenCalledWith(
-      expect.objectContaining({
-        videoId: 'video-123',
-        stage: 'completed',
-        percent: 100,
-        terminal: true,
-      }),
-    );
     expect(eventPublisher.publishVideoProcessedFailed).not.toHaveBeenCalled();
     expect((job.updateProgress as jest.Mock).mock.calls.at(-1)).toEqual([100]);
     expect(storageService.cleanupLocalDirectory).toHaveBeenCalledWith(
@@ -122,7 +115,7 @@ describe('VideoProcessor', () => {
     );
   });
 
-  it('publishes failed event when source duration exceeds the limit', async () => {
+  it('does not publish failed event from a transient handler failure', async () => {
     const job = createJob(['1080p']);
     const { storageService, transcoderService, eventPublisher, configService } =
       createMocks();
@@ -143,20 +136,10 @@ describe('VideoProcessor', () => {
     );
 
     expect(transcoderService.transcodeToHlsVariants).not.toHaveBeenCalled();
-    expect(eventPublisher.publishVideoProcessedFailed).toHaveBeenCalledWith({
-      videoId: 'video-123',
-      traceId: 'trace-123',
-      errorMessage: 'Video duration exceeds maximum limit of 4 hours',
-    });
-    expect(eventPublisher.publishVideoProgressUpdated).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stage: 'failed',
-        terminal: true,
-      }),
-    );
+    expect(eventPublisher.publishVideoProcessedFailed).not.toHaveBeenCalled();
   });
 
-  it('publishes failed event when source is below minimum supported resolution', async () => {
+  it('throws without publishing failed event before BullMQ exhausts retries', async () => {
     const job = createJob(['480p']);
     const { storageService, transcoderService, eventPublisher, configService } =
       createMocks();
@@ -177,18 +160,65 @@ describe('VideoProcessor', () => {
     );
 
     expect(transcoderService.transcodeToHlsVariants).not.toHaveBeenCalled();
+    expect(eventPublisher.publishVideoProcessedFailed).not.toHaveBeenCalled();
+  });
+
+  it('does not publish final failed event before the last attempt', async () => {
+    const job = {
+      ...createJob(['720p']),
+      opts: { attempts: 3 },
+      attemptsMade: 2,
+    } as Job<VideoProcessingJobData>;
+    const { storageService, transcoderService, eventPublisher, configService } =
+      createMocks();
+    const processor = new VideoProcessor(
+      storageService,
+      transcoderService,
+      eventPublisher,
+      configService,
+    );
+
+    await (
+      processor as unknown as {
+        publishFinalFailureIfNeeded: (
+          job: Job<VideoProcessingJobData>,
+          error: Error,
+        ) => Promise<void>;
+      }
+    ).publishFinalFailureIfNeeded(job, new Error('ffmpeg failed'));
+
+    expect(eventPublisher.publishVideoProcessedFailed).not.toHaveBeenCalled();
+  });
+
+  it('publishes final failed event after the third failed attempt', async () => {
+    const job = {
+      ...createJob(['720p']),
+      opts: { attempts: 3 },
+      attemptsMade: 3,
+    } as Job<VideoProcessingJobData>;
+    const { storageService, transcoderService, eventPublisher, configService } =
+      createMocks();
+    const processor = new VideoProcessor(
+      storageService,
+      transcoderService,
+      eventPublisher,
+      configService,
+    );
+
+    await (
+      processor as unknown as {
+        publishFinalFailureIfNeeded: (
+          job: Job<VideoProcessingJobData>,
+          error: Error,
+        ) => Promise<void>;
+      }
+    ).publishFinalFailureIfNeeded(job, new Error('ffmpeg failed'));
+
     expect(eventPublisher.publishVideoProcessedFailed).toHaveBeenCalledWith({
       videoId: 'video-123',
       traceId: 'trace-123',
-      errorMessage:
-        'Video source resolution is lower than minimum supported 480p',
+      errorMessage: 'Video processing failed after 3 attempts: ffmpeg failed',
     });
-    expect(eventPublisher.publishVideoProgressUpdated).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stage: 'failed',
-        terminal: true,
-      }),
-    );
   });
 
   it('skips unsupported job names without side effects', async () => {

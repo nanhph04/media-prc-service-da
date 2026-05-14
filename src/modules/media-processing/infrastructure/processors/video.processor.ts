@@ -41,6 +41,9 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
         connection: queueOptions.connection,
       },
     );
+    this.worker.on('failed', (job, error) => {
+      void this.publishFinalFailureIfNeeded(job, error);
+    });
   }
 
   isReady(): boolean {
@@ -62,32 +65,12 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
 
     try {
       await job.updateProgress(5);
-      await this.eventPublisher.publishVideoProgressUpdated({
-        videoId,
-        traceId,
-        pipeline: 'processing',
-        stage: 'queued',
-        percent: 5,
-        message: 'Video queued for processing',
-        terminal: false,
-      });
-      this.logProgress(videoId, 'queued', 5, false);
       this.logger.log(
         `Starting video processing for videoId=${videoId}, rawFileKey=${rawFileKey}`,
       );
 
       await this.storageService.downloadRawVideo(rawFileKey, paths.inputPath);
       await job.updateProgress(15);
-      await this.eventPublisher.publishVideoProgressUpdated({
-        videoId,
-        traceId,
-        pipeline: 'processing',
-        stage: 'downloading',
-        percent: 15,
-        message: 'Raw video downloaded',
-        terminal: false,
-      });
-      this.logProgress(videoId, 'downloading', 15, false);
 
       const metadata = await this.transcoderService.probeVideoMetadata(
         paths.inputPath,
@@ -98,16 +81,6 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
         metadata.sourceHeight,
       );
       await job.updateProgress(35);
-      await this.eventPublisher.publishVideoProgressUpdated({
-        videoId,
-        traceId,
-        pipeline: 'processing',
-        stage: 'probing',
-        percent: 35,
-        message: 'Video metadata analyzed',
-        terminal: false,
-      });
-      this.logProgress(videoId, 'probing', 35, false);
 
       const transcodeResult =
         await this.transcoderService.transcodeToHlsVariants({
@@ -117,16 +90,6 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
         });
 
       await job.updateProgress(75);
-      await this.eventPublisher.publishVideoProgressUpdated({
-        videoId,
-        traceId,
-        pipeline: 'processing',
-        stage: 'transcoding',
-        percent: 75,
-        message: 'HLS variants created',
-        terminal: false,
-      });
-      this.logProgress(videoId, 'transcoding', 75, false);
 
       const uploadedOutput = await this.storageService.uploadHlsOutput(
         videoId,
@@ -135,26 +98,6 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
       );
 
       await job.updateProgress(90);
-      await this.eventPublisher.publishVideoProgressUpdated({
-        videoId,
-        traceId,
-        pipeline: 'processing',
-        stage: 'uploading',
-        percent: 90,
-        message: 'Processed assets uploaded',
-        terminal: false,
-      });
-      this.logProgress(videoId, 'uploading', 90, false);
-      await this.eventPublisher.publishVideoProgressUpdated({
-        videoId,
-        traceId,
-        pipeline: 'processing',
-        stage: 'finalizing',
-        percent: 95,
-        message: 'Finalizing processing',
-        terminal: false,
-      });
-      this.logProgress(videoId, 'finalizing', 95, false);
       await this.eventPublisher.publishVideoProcessedSuccess({
         videoId,
         traceId,
@@ -163,16 +106,6 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
         resolution: uploadedOutput.resolution,
       });
       await job.updateProgress(100);
-      await this.eventPublisher.publishVideoProgressUpdated({
-        videoId,
-        traceId,
-        pipeline: 'processing',
-        stage: 'completed',
-        percent: 100,
-        message: 'Video processing completed',
-        terminal: true,
-      });
-      this.logProgress(videoId, 'completed', 100, true);
 
       this.logger.log(`Completed video processing for videoId=${videoId}`);
     } catch (error: unknown) {
@@ -187,27 +120,38 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
         stack,
       );
 
-      await this.eventPublisher.publishVideoProcessedFailed({
-        videoId,
-        traceId,
-        errorMessage: message,
-      });
-      await this.eventPublisher.publishVideoProgressUpdated({
-        videoId,
-        traceId,
-        pipeline: 'processing',
-        stage: 'failed',
-        percent: 100,
-        message,
-        terminal: true,
-        errorMessage: message,
-      });
-      this.logProgress(videoId, 'failed', 100, true);
-
       throw error;
     } finally {
       await this.storageService.cleanupLocalDirectory(paths.workDirectory);
     }
+  }
+
+  private async publishFinalFailureIfNeeded(
+    job: Job<VideoProcessingJobData> | undefined,
+    error: Error,
+  ): Promise<void> {
+    if (!job || job.name !== TRANSCODE_JOB_NAME) {
+      return;
+    }
+
+    const maxAttempts = job.opts.attempts ?? 1;
+    if (job.attemptsMade < maxAttempts) {
+      this.logger.warn(
+        `Video processing attempt failed for videoId=${job.data.videoId}; retrying attempt ${job.attemptsMade + 1}/${maxAttempts}`,
+      );
+      return;
+    }
+
+    const errorMessage =
+      maxAttempts > 1
+        ? `Video processing failed after ${maxAttempts} attempts: ${error.message}`
+        : error.message;
+
+    await this.eventPublisher.publishVideoProcessedFailed({
+      videoId: job.data.videoId,
+      traceId: job.data.traceId,
+      errorMessage,
+    });
   }
 
   private assertDurationWithinLimit(durationSeconds?: number): void {
@@ -269,14 +213,4 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
     return orderedResolutions;
   }
 
-  private logProgress(
-    videoId: string,
-    stage: string,
-    percent: number,
-    terminal: boolean,
-  ): void {
-    this.logger.log(
-      `Published processing progress for videoId=${videoId}, stage=${stage}, percent=${percent}, terminal=${terminal}`,
-    );
-  }
 }
