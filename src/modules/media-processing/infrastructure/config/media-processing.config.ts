@@ -3,6 +3,8 @@ import { ConfigService } from '../../../../shared/infrastructure/config/config.s
 export interface KafkaEventPublisherOptions {
   successTopic: string;
   failedTopic: string;
+  thumbnailGeneratedTopic: string;
+  thumbnailFailedTopic: string;
 }
 
 export interface MinioStorageOptions {
@@ -13,6 +15,9 @@ export interface MinioStorageOptions {
   secretKey: string;
   rawBucket: string;
   processedBucket: string;
+  publicEndpoint?: string;
+  publicPort?: number;
+  publicUseSSL?: boolean;
   tempRootDirectory: string;
 }
 
@@ -52,26 +57,54 @@ export const getKafkaEventPublisherOptions = (
     'KAFKA_VIDEO_PROCESSED_FAILED_TOPIC',
     'video.processed.failed',
   ),
+  thumbnailGeneratedTopic: configService.get<string>(
+    'KAFKA_VIDEO_THUMBNAIL_GENERATED_TOPIC',
+    'video.thumbnail.generated',
+  ),
+  thumbnailFailedTopic: configService.get<string>(
+    'KAFKA_VIDEO_THUMBNAIL_FAILED_TOPIC',
+    'video.thumbnail.failed',
+  ),
 });
 
 export const getMinioStorageOptions = (
   configService: ConfigService,
-): MinioStorageOptions => ({
-  endPoint: configService.get<string>('MINIO_ENDPOINT', 'localhost'),
-  port: configService.get<number>('MINIO_PORT', 9000),
-  useSSL: configService.get<boolean>('MINIO_USE_SSL', false),
-  accessKey: configService.get<string>('MINIO_ACCESS_KEY', 'admin'),
-  secretKey: configService.get<string>('MINIO_SECRET_KEY', 'admin123'),
-  rawBucket: configService.get<string>('MINIO_RAW_BUCKET', 'media-raw'),
-  processedBucket: configService.get<string>(
-    'MINIO_PROCESSED_BUCKET',
-    'media-processed',
-  ),
-  tempRootDirectory: configService.get<string>(
-    'MEDIA_PROCESSING_TMP_DIR',
-    '/tmp/media-processing',
-  ),
-});
+): MinioStorageOptions => {
+  const publicPort = configService.get<string | number>(
+    'MINIO_PUBLIC_PORT',
+    '',
+  );
+  const publicUseSSL = configService.get<string | boolean>(
+    'MINIO_PUBLIC_USE_SSL',
+    '',
+  );
+
+  return {
+    endPoint: configService.get<string>('MINIO_ENDPOINT', 'localhost'),
+    port: configService.get<number>('MINIO_PORT', 9000),
+    useSSL: configService.get<boolean>('MINIO_USE_SSL', false),
+    accessKey: configService.get<string>('MINIO_ACCESS_KEY', 'admin'),
+    secretKey: configService.get<string>('MINIO_SECRET_KEY', 'admin123'),
+    rawBucket: configService.get<string>('MINIO_RAW_BUCKET', 'media-raw'),
+    processedBucket: configService.get<string>(
+      'MINIO_PROCESSED_BUCKET',
+      'media-processed',
+    ),
+    publicEndpoint: configService.get<string>('MINIO_PUBLIC_ENDPOINT', ''),
+    publicPort:
+      publicPort === '' || publicPort === undefined
+        ? undefined
+        : Number(publicPort),
+    publicUseSSL:
+      publicUseSSL === '' || publicUseSSL === undefined
+        ? undefined
+        : publicUseSSL === true || publicUseSSL === 'true',
+    tempRootDirectory: configService.get<string>(
+      'MEDIA_PROCESSING_TMP_DIR',
+      '/tmp/media-processing',
+    ),
+  };
+};
 
 export const getRedisQueueOptions = (
   configService: ConfigService,

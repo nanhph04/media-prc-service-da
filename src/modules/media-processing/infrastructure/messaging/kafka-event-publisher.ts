@@ -12,6 +12,8 @@ import { lastValueFrom } from 'rxjs';
 import type { IIntegrationEvent } from '../../../../shared/domain/types/events/base-integration.event';
 import type { VideoProcessedFailedEventData } from '../../application/dtos/video-processed-failed.event-data';
 import type { VideoProcessedSuccessEventData } from '../../application/dtos/video-processed-success.event-data';
+import type { VideoThumbnailFailedEventData } from '../../application/dtos/video-thumbnail-failed.event-data';
+import type { VideoThumbnailGeneratedEventData } from '../../application/dtos/video-thumbnail-generated.event-data';
 import {
   KAFKA_EVENT_PUBLISHER_OPTIONS,
   type KafkaEventPublisherOptions,
@@ -23,6 +25,16 @@ export interface PublishVideoProcessedSuccessInput extends VideoProcessedSuccess
 }
 
 export interface PublishVideoProcessedFailedInput extends VideoProcessedFailedEventData {
+  traceId?: string;
+}
+
+export interface PublishVideoThumbnailGeneratedInput
+  extends VideoThumbnailGeneratedEventData {
+  traceId?: string;
+}
+
+export interface PublishVideoThumbnailFailedInput
+  extends VideoThumbnailFailedEventData {
   traceId?: string;
 }
 
@@ -43,6 +55,8 @@ export class KafkaEventPublisher implements OnModuleInit, OnModuleDestroy {
     this.options = options ?? {
       successTopic: 'video.processed.success',
       failedTopic: 'video.processed.failed',
+      thumbnailGeneratedTopic: 'video.thumbnail.generated',
+      thumbnailFailedTopic: 'video.thumbnail.failed',
     };
   }
 
@@ -103,6 +117,58 @@ export class KafkaEventPublisher implements OnModuleInit, OnModuleDestroy {
 
     await this.publish(this.options.failedTopic, event, {
       kind: 'failed',
+      videoId: input.videoId,
+    });
+  }
+
+  async publishVideoThumbnailGenerated(
+    input: PublishVideoThumbnailGeneratedInput,
+  ): Promise<void> {
+    const event: IIntegrationEvent<VideoThumbnailGeneratedEventData> = {
+      eventId: randomUUID(),
+      eventType: this.options.thumbnailGeneratedTopic,
+      aggregateId: input.videoId,
+      timestamp: new Date().toISOString(),
+      version: 1,
+      traceId: input.traceId ?? randomUUID(),
+      sourceService: 'media-processing-service',
+      data: {
+        videoId: input.videoId,
+        thumbnailObjectKey: input.thumbnailObjectKey,
+        thumbnailUrl: input.thumbnailUrl,
+        width: input.width,
+        height: input.height,
+        capturedAtSecond: input.capturedAtSecond,
+      },
+    };
+
+    await this.publish(this.options.thumbnailGeneratedTopic, event, {
+      kind: 'thumbnail-generated',
+      videoId: input.videoId,
+    });
+  }
+
+  async publishVideoThumbnailFailed(
+    input: PublishVideoThumbnailFailedInput,
+  ): Promise<void> {
+    const event: IIntegrationEvent<VideoThumbnailFailedEventData> = {
+      eventId: randomUUID(),
+      eventType: this.options.thumbnailFailedTopic,
+      aggregateId: input.videoId,
+      timestamp: new Date().toISOString(),
+      version: 1,
+      traceId: input.traceId ?? randomUUID(),
+      sourceService: 'media-processing-service',
+      data: {
+        videoId: input.videoId,
+        reasonCode: input.reasonCode,
+        message: input.message,
+        retryable: input.retryable,
+      },
+    };
+
+    await this.publish(this.options.thumbnailFailedTopic, event, {
+      kind: 'thumbnail-failed',
       videoId: input.videoId,
     });
   }

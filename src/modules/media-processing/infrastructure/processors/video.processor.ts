@@ -76,6 +76,7 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
         paths.inputPath,
       );
       this.assertDurationWithinLimit(metadata.durationSeconds);
+      await this.generateThumbnailIfRequested(job, paths, metadata.durationSeconds);
       const normalizedResolutions = this.normalizeRequestedResolutions(
         job.data.resolution,
         metadata.sourceHeight,
@@ -151,6 +152,68 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
       videoId: job.data.videoId,
       traceId: job.data.traceId,
       errorMessage,
+    });
+    if (job.data.thumbnailTargetObjectKey) {
+      await this.eventPublisher.publishVideoThumbnailFailed({
+        videoId: job.data.videoId,
+        traceId: job.data.traceId,
+        reasonCode: 'UNKNOWN',
+        message: errorMessage,
+        retryable: false,
+      });
+    }
+  }
+
+  private async generateThumbnailIfRequested(
+    job: Job<VideoProcessingJobData>,
+    paths: ReturnType<MinioStorageService['createWorkPaths']>,
+    durationSeconds?: number,
+  ): Promise<void> {
+    const thumbnailTargetObjectKey = job.data.thumbnailTargetObjectKey;
+    if (!thumbnailTargetObjectKey) {
+      return;
+    }
+
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        const thumbnail = await this.transcoderService.generateThumbnail({
+          inputPath: paths.inputPath,
+          outputPath: paths.thumbnailPath,
+          durationSeconds,
+        });
+        const uploadedThumbnail = await this.storageService.uploadThumbnail(
+          thumbnailTargetObjectKey,
+          paths.thumbnailPath,
+        );
+        await this.eventPublisher.publishVideoThumbnailGenerated({
+          videoId: job.data.videoId,
+          traceId: job.data.traceId,
+          thumbnailObjectKey: uploadedThumbnail.objectKey,
+          thumbnailUrl: uploadedThumbnail.url,
+          width: thumbnail.width,
+          height: thumbnail.height,
+          capturedAtSecond: thumbnail.capturedAtSecond,
+        });
+        return;
+      } catch (error: unknown) {
+        lastError = error;
+        const message =
+          error instanceof Error ? error.message : 'Unknown thumbnail error';
+        this.logger.warn(
+          `Thumbnail generation attempt ${attempt}/3 failed for videoId=${job.data.videoId}: ${message}`,
+        );
+      }
+    }
+
+    const message =
+      lastError instanceof Error ? lastError.message : 'Unknown thumbnail error';
+    await this.eventPublisher.publishVideoThumbnailFailed({
+      videoId: job.data.videoId,
+      traceId: job.data.traceId,
+      reasonCode: 'FFMPEG_FAILED',
+      message,
+      retryable: false,
     });
   }
 

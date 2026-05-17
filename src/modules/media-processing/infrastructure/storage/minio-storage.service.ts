@@ -13,6 +13,7 @@ export interface VideoProcessingWorkPaths {
   inputPath: string;
   outputDirectory: string;
   masterPlaylistPath: string;
+  thumbnailPath: string;
 }
 
 export interface UploadedHlsOutput {
@@ -59,6 +60,7 @@ export class MinioStorageService {
       inputPath: join(workDirectory, 'input.mp4'),
       outputDirectory,
       masterPlaylistPath: join(outputDirectory, 'master.m3u8'),
+      thumbnailPath: join(workDirectory, 'thumbnail.jpg'),
     };
   }
 
@@ -101,6 +103,26 @@ export class MinioStorageService {
     };
   }
 
+  async uploadThumbnail(
+    objectKey: string,
+    thumbnailPath: string,
+  ): Promise<{ objectKey: string; url: string }> {
+    await this.minioClient.fPutObject(
+      this.options.processedBucket,
+      objectKey,
+      thumbnailPath,
+      {
+        'Content-Type': 'image/jpeg',
+        'Cache-Control': 'public, max-age=31536000, immutable',
+      },
+    );
+
+    return {
+      objectKey,
+      url: this.createProcessedObjectUrl(objectKey),
+    };
+  }
+
   async cleanupLocalDirectory(workDirectory: string): Promise<void> {
     await rm(workDirectory, { recursive: true, force: true });
   }
@@ -111,6 +133,23 @@ export class MinioStorageService {
     }
 
     return `processed/${videoId}/${relativePath}`;
+  }
+
+  private createProcessedObjectUrl(objectKey: string): string {
+    const endpoint =
+      this.options.publicEndpoint && this.options.publicEndpoint.length > 0
+        ? this.options.publicEndpoint
+        : this.options.endPoint;
+    const port = this.options.publicPort ?? this.options.port;
+    const useSSL = this.options.publicUseSSL ?? this.options.useSSL;
+    const url = new URL(`${useSSL ? 'https' : 'http'}://${endpoint}`);
+    url.port = String(port);
+    url.pathname = `${this.options.processedBucket}/${objectKey}`
+      .split('/')
+      .map((part) => encodeURIComponent(part))
+      .join('/');
+
+    return url.toString();
   }
 
   private async listFiles(directory: string): Promise<string[]> {

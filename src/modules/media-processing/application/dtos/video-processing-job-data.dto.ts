@@ -4,4 +4,5 @@ export interface VideoProcessingJobData {
   resolution: string[];
   userId: string;
   traceId?: string;
+  thumbnailTargetObjectKey?: string;
 }

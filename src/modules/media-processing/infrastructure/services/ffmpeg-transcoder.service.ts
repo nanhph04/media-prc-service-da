@@ -39,6 +39,7 @@ export type TranscodeResolutionName =
 
 export interface VideoProbeMetadata {
   durationSeconds?: number;
+  sourceWidth?: number;
   sourceHeight?: number;
   hasAudioStream: boolean;
 }
@@ -52,6 +53,18 @@ export interface HlsVariantTranscodeInput {
 export interface HlsVariantTranscodeResult {
   durationSeconds?: number;
   resolutions: TranscodeResolutionName[];
+}
+
+export interface ThumbnailGenerationInput {
+  inputPath: string;
+  outputPath: string;
+  durationSeconds?: number;
+}
+
+export interface ThumbnailGenerationResult {
+  width: number;
+  height: number;
+  capturedAtSecond: number;
 }
 
 @Injectable()
@@ -74,6 +87,7 @@ export class FfmpegTranscoderService {
             format?: { duration?: number };
             streams?: Array<{
               codec_type?: string;
+              width?: number;
               height?: number;
             }>;
           },
@@ -93,6 +107,7 @@ export class FfmpegTranscoderService {
 
           resolve({
             durationSeconds,
+            sourceWidth: videoStream?.width,
             sourceHeight: videoStream?.height,
             hasAudioStream: streams.some(
               (stream) => stream.codec_type === 'audio',
@@ -126,6 +141,55 @@ export class FfmpegTranscoderService {
       durationSeconds: metadata.durationSeconds,
       resolutions: input.resolutions,
     };
+  }
+
+  async generateThumbnail(
+    input: ThumbnailGenerationInput,
+  ): Promise<ThumbnailGenerationResult> {
+    await mkdir(dirname(input.outputPath), { recursive: true });
+    const capturedAtSecond = this.resolveThumbnailCaptureSecond(
+      input.durationSeconds,
+    );
+
+    return new Promise<ThumbnailGenerationResult>((resolve, reject) => {
+      const stderrLines: string[] = [];
+
+      ffmpeg(input.inputPath)
+        .outputOptions([
+          `-ss ${capturedAtSecond}`,
+          '-frames:v 1',
+          '-q:v 3',
+          '-vf scale=w=1280:h=-2:force_original_aspect_ratio=decrease',
+        ])
+        .output(input.outputPath)
+        .on('stderr', (line: string) => {
+          stderrLines.push(line.trim());
+        })
+        .on('end', () => {
+          void this.probeVideoMetadata(input.outputPath)
+            .then((metadata) =>
+              resolve({
+                width: metadata.sourceWidth ?? 1280,
+                height: metadata.sourceHeight ?? 0,
+                capturedAtSecond,
+              }),
+            )
+            .catch(() =>
+              resolve({
+                width: 1280,
+                height: 0,
+                capturedAtSecond,
+              }),
+            );
+        })
+        .on('error', (error: Error) => {
+          const stderr = stderrLines.filter(Boolean).slice(-10).join('\n');
+          const message =
+            stderr.length > 0 ? `${error.message}\n${stderr}` : error.message;
+          reject(new Error(message));
+        })
+        .run();
+    });
   }
 
   private async transcodeSingleVariant(
@@ -215,6 +279,14 @@ export class FfmpegTranscoderService {
       `${lines.join('\n')}\n`,
       'utf8',
     );
+  }
+
+  private resolveThumbnailCaptureSecond(durationSeconds?: number): number {
+    if (!durationSeconds || durationSeconds <= 1) {
+      return 1;
+    }
+
+    return Math.max(1, Math.floor(durationSeconds * 0.1));
   }
 
   private getPresetOrThrow(
