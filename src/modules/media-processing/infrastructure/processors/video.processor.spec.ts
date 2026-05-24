@@ -10,6 +10,7 @@ import type { MinioStorageService } from '../storage/minio-storage.service';
 describe('VideoProcessor', () => {
   const createJob = (
     resolution: string[] = ['720p'],
+    data: Partial<VideoProcessingJobData> = {},
   ): Job<VideoProcessingJobData> =>
     ({
       name: TRANSCODE_JOB_NAME,
@@ -19,6 +20,7 @@ describe('VideoProcessor', () => {
         resolution,
         userId: 'user-123',
         traceId: 'trace-123',
+        ...data,
       },
       opts: { attempts: 3 },
       attemptsMade: 0,
@@ -43,6 +45,12 @@ describe('VideoProcessor', () => {
         inputPath: '/tmp/video-123/input.mp4',
         outputDirectory: '/tmp/video-123/hls',
         masterPlaylistPath: '/tmp/video-123/hls/master.m3u8',
+        thumbnailPath: '/tmp/video-123/thumbnail.jpg',
+      }),
+      getDefaultThumbnailBucket: jest.fn().mockReturnValue('media-public'),
+      uploadThumbnail: jest.fn().mockResolvedValue({
+        objectKey: 'videos/video-123/thumbnails/default.jpg',
+        url: 'http://localhost:9000/media-public/videos/video-123/thumbnails/default.jpg',
       }),
     } as unknown as jest.Mocked<MinioStorageService>,
     transcoderService: {
@@ -55,10 +63,17 @@ describe('VideoProcessor', () => {
         durationSeconds: 42,
         resolutions: ['480p', '720p'],
       }),
+      generateThumbnail: jest.fn().mockResolvedValue({
+        width: 1280,
+        height: 720,
+        capturedAtSecond: 4,
+      }),
     } as unknown as jest.Mocked<FfmpegTranscoderService>,
     eventPublisher: {
       publishVideoProcessedFailed: jest.fn().mockResolvedValue(undefined),
       publishVideoProcessedSuccess: jest.fn().mockResolvedValue(undefined),
+      publishVideoThumbnailGenerated: jest.fn().mockResolvedValue(undefined),
+      publishVideoThumbnailFailed: jest.fn().mockResolvedValue(undefined),
     } as unknown as jest.Mocked<KafkaEventPublisher>,
     configService: {
       getMaxVideoDurationSeconds: jest.fn().mockReturnValue(4 * 60 * 60),
@@ -113,6 +128,69 @@ describe('VideoProcessor', () => {
     expect(storageService.cleanupLocalDirectory).toHaveBeenCalledWith(
       '/tmp/video-123',
     );
+  });
+
+  it('uploads generated thumbnails to the target bucket from the job payload', async () => {
+    const job = createJob(['720p'], {
+      thumbnailTargetObjectKey: 'videos/video-123/thumbnails/default.jpg',
+      thumbnailTargetBucket: 'media-public',
+    });
+    const { storageService, transcoderService, eventPublisher, configService } =
+      createMocks();
+    const processor = new VideoProcessor(
+      storageService,
+      transcoderService,
+      eventPublisher,
+      configService,
+    );
+
+    await processor.handleVideoProcessing(job);
+
+    expect(transcoderService.generateThumbnail).toHaveBeenCalledWith({
+      inputPath: '/tmp/video-123/input.mp4',
+      outputPath: '/tmp/video-123/thumbnail.jpg',
+      durationSeconds: 42,
+    });
+    expect(storageService.uploadThumbnail).toHaveBeenCalledWith(
+      'media-public',
+      'videos/video-123/thumbnails/default.jpg',
+      '/tmp/video-123/thumbnail.jpg',
+    );
+    expect(storageService.getDefaultThumbnailBucket).not.toHaveBeenCalled();
+    expect(eventPublisher.publishVideoThumbnailGenerated).toHaveBeenCalledWith({
+      videoId: 'video-123',
+      traceId: 'trace-123',
+      thumbnailObjectKey: 'videos/video-123/thumbnails/default.jpg',
+      thumbnailUrl:
+        'http://localhost:9000/media-public/videos/video-123/thumbnails/default.jpg',
+      width: 1280,
+      height: 720,
+      capturedAtSecond: 4,
+    });
+  });
+
+  it('uses the configured public thumbnail bucket when old jobs omit target bucket', async () => {
+    const job = createJob(['720p'], {
+      thumbnailTargetObjectKey: 'videos/video-123/thumbnails/default.jpg',
+    });
+    const { storageService, transcoderService, eventPublisher, configService } =
+      createMocks();
+    const processor = new VideoProcessor(
+      storageService,
+      transcoderService,
+      eventPublisher,
+      configService,
+    );
+
+    await processor.handleVideoProcessing(job);
+
+    expect(storageService.getDefaultThumbnailBucket).toHaveBeenCalled();
+    expect(storageService.uploadThumbnail).toHaveBeenCalledWith(
+      'media-public',
+      'videos/video-123/thumbnails/default.jpg',
+      '/tmp/video-123/thumbnail.jpg',
+    );
+    expect(eventPublisher.publishVideoThumbnailGenerated).toHaveBeenCalled();
   });
 
   it('does not publish failed event from a transient handler failure', async () => {

@@ -15,6 +15,7 @@ export interface MinioStorageOptions {
   secretKey: string;
   rawBucket: string;
   processedBucket: string;
+  publicBucket: string;
   publicEndpoint?: string;
   publicPort?: number;
   publicUseSSL?: boolean;
@@ -89,6 +90,10 @@ export const getMinioStorageOptions = (
     processedBucket: configService.get<string>(
       'MINIO_PROCESSED_BUCKET',
       'media-processed',
+    ),
+    publicBucket: configService.get<string>(
+      'MINIO_PUBLIC_BUCKET',
+      'media-public',
     ),
     publicEndpoint: configService.get<string>('MINIO_PUBLIC_ENDPOINT', ''),
     publicPort:

@@ -40,6 +40,7 @@ export class MinioStorageService {
       secretKey: 'admin123',
       rawBucket: 'media-raw',
       processedBucket: 'media-processed',
+      publicBucket: 'media-public',
       tempRootDirectory: '/tmp/media-processing',
     };
     this.minioClient = new Client({
@@ -103,23 +104,23 @@ export class MinioStorageService {
     };
   }
 
+  getDefaultThumbnailBucket(): string {
+    return this.options.publicBucket;
+  }
+
   async uploadThumbnail(
+    bucketName: string,
     objectKey: string,
     thumbnailPath: string,
   ): Promise<{ objectKey: string; url: string }> {
-    await this.minioClient.fPutObject(
-      this.options.processedBucket,
-      objectKey,
-      thumbnailPath,
-      {
-        'Content-Type': 'image/jpeg',
-        'Cache-Control': 'public, max-age=31536000, immutable',
-      },
-    );
+    await this.minioClient.fPutObject(bucketName, objectKey, thumbnailPath, {
+      'Content-Type': 'image/jpeg',
+      'Cache-Control': 'public, max-age=31536000, immutable',
+    });
 
     return {
       objectKey,
-      url: this.createProcessedObjectUrl(objectKey),
+      url: this.createObjectUrl(bucketName, objectKey),
     };
   }
 
@@ -135,7 +136,7 @@ export class MinioStorageService {
     return `processed/${videoId}/${relativePath}`;
   }
 
-  private createProcessedObjectUrl(objectKey: string): string {
+  private createObjectUrl(bucketName: string, objectKey: string): string {
     const endpoint =
       this.options.publicEndpoint && this.options.publicEndpoint.length > 0
         ? this.options.publicEndpoint
@@ -144,7 +145,7 @@ export class MinioStorageService {
     const useSSL = this.options.publicUseSSL ?? this.options.useSSL;
     const url = new URL(`${useSSL ? 'https' : 'http'}://${endpoint}`);
     url.port = String(port);
-    url.pathname = `${this.options.processedBucket}/${objectKey}`
+    url.pathname = `${bucketName}/${objectKey}`
       .split('/')
       .map((part) => encodeURIComponent(part))
       .join('/');

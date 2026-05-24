@@ -76,7 +76,11 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
         paths.inputPath,
       );
       this.assertDurationWithinLimit(metadata.durationSeconds);
-      await this.generateThumbnailIfRequested(job, paths, metadata.durationSeconds);
+      await this.generateThumbnailIfRequested(
+        job,
+        paths,
+        metadata.durationSeconds,
+      );
       const normalizedResolutions = this.normalizeRequestedResolutions(
         job.data.resolution,
         metadata.sourceHeight,
@@ -173,6 +177,9 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
     if (!thumbnailTargetObjectKey) {
       return;
     }
+    const thumbnailTargetBucket =
+      job.data.thumbnailTargetBucket ??
+      this.storageService.getDefaultThumbnailBucket();
 
     let lastError: unknown;
     for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -183,6 +190,7 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
           durationSeconds,
         });
         const uploadedThumbnail = await this.storageService.uploadThumbnail(
+          thumbnailTargetBucket,
           thumbnailTargetObjectKey,
           paths.thumbnailPath,
         );
@@ -207,7 +215,9 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
     }
 
     const message =
-      lastError instanceof Error ? lastError.message : 'Unknown thumbnail error';
+      lastError instanceof Error
+        ? lastError.message
+        : 'Unknown thumbnail error';
     await this.eventPublisher.publishVideoThumbnailFailed({
       videoId: job.data.videoId,
       traceId: job.data.traceId,
@@ -275,5 +285,4 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
 
     return orderedResolutions;
   }
-
 }

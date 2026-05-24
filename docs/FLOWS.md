@@ -12,12 +12,12 @@ sequenceDiagram
     participant Kafka
 
     Media->>Queue: Add transcode-job
-    Queue-->>Processor: videoId, rawFileKey, resolutions, thumbnailTargetObjectKey
+    Queue-->>Processor: videoId, rawFileKey, resolutions, thumbnailTargetBucket, thumbnailTargetObjectKey
     Processor->>Storage: Download raw video from bucket raw
     Processor->>Processor: Probe metadata with FFmpeg
     opt thumbnailTargetObjectKey present
         Processor->>Processor: Generate JPEG thumbnail at ~10% duration, fallback second 1
-        Processor->>Storage: Upload thumbnail to bucket processed
+        Processor->>Storage: Upload thumbnail to requested target bucket
         Processor->>Kafka: Publish video.thumbnail.generated
     end
     Processor->>Processor: Transcode HLS variants
@@ -37,4 +37,4 @@ sequenceDiagram
 
 - Raw input: supplied by Media Service, usually `uploads/confirmed/{videoId}/{uuid}.mp4` in bucket `raw`.
 - HLS output: `processed/{videoId}/master.m3u8` and `processed/{videoId}/segments/*.ts` in bucket `processed`.
-- Auto thumbnail: `videos/{videoId}/thumbnails/default.jpg` in bucket `processed`.
+- Auto thumbnail: `videos/{videoId}/thumbnails/default.jpg` in the `thumbnailTargetBucket` supplied by Media Service, normally bucket `public`.

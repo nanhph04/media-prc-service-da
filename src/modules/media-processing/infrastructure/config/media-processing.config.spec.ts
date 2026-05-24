@@ -21,10 +21,12 @@ describe('media-processing config', () => {
   it('uses media_service-compatible MinIO bucket defaults', () => {
     delete process.env.MINIO_RAW_BUCKET;
     delete process.env.MINIO_PROCESSED_BUCKET;
+    delete process.env.MINIO_PUBLIC_BUCKET;
     const options = getMinioStorageOptions(new ConfigService());
 
     expect(options.rawBucket).toBe('media-raw');
     expect(options.processedBucket).toBe('media-processed');
+    expect(options.publicBucket).toBe('media-public');
   });
 
   it('uses media_service-compatible BullMQ defaults and job name', () => {

@@ -5,4 +5,5 @@ export interface VideoProcessingJobData {
   userId: string;
   traceId?: string;
   thumbnailTargetObjectKey?: string;
+  thumbnailTargetBucket?: string;
 }
