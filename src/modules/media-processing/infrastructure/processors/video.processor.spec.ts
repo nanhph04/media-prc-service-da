@@ -1,5 +1,6 @@
 import type { Job } from 'bullmq';
 import { ConfigService } from '../../../../shared/infrastructure/config/config.service';
+import { VIDEO_PROCESSING_ERROR_MESSAGES } from '../../application/constants/video-processing-errors.constant';
 import type { VideoProcessingJobData } from '../../application/dtos/video-processing-job-data.dto';
 import { TRANSCODE_JOB_NAME } from '../config/media-processing.config';
 import type { KafkaEventPublisher } from '../messaging/kafka-event-publisher';
@@ -210,7 +211,7 @@ describe('VideoProcessor', () => {
     );
 
     await expect(processor.handleVideoProcessing(job)).rejects.toThrow(
-      'Video duration exceeds maximum limit of 4 hours',
+      VIDEO_PROCESSING_ERROR_MESSAGES.DURATION_EXCEEDS_LIMIT,
     );
 
     expect(transcoderService.transcodeToHlsVariants).not.toHaveBeenCalled();
@@ -234,7 +235,45 @@ describe('VideoProcessor', () => {
     );
 
     await expect(processor.handleVideoProcessing(job)).rejects.toThrow(
-      'Video source resolution is lower than minimum supported 480p',
+      VIDEO_PROCESSING_ERROR_MESSAGES.SOURCE_RESOLUTION_BELOW_MINIMUM,
+    );
+
+    expect(transcoderService.transcodeToHlsVariants).not.toHaveBeenCalled();
+    expect(eventPublisher.publishVideoProcessedFailed).not.toHaveBeenCalled();
+  });
+
+  it('throws a specific error when no requested resolutions are provided', async () => {
+    const job = createJob([]);
+    const { storageService, transcoderService, eventPublisher, configService } =
+      createMocks();
+    const processor = new VideoProcessor(
+      storageService,
+      transcoderService,
+      eventPublisher,
+      configService,
+    );
+
+    await expect(processor.handleVideoProcessing(job)).rejects.toThrow(
+      VIDEO_PROCESSING_ERROR_MESSAGES.REQUESTED_RESOLUTIONS_REQUIRED,
+    );
+
+    expect(transcoderService.transcodeToHlsVariants).not.toHaveBeenCalled();
+    expect(eventPublisher.publishVideoProcessedFailed).not.toHaveBeenCalled();
+  });
+
+  it('throws a specific error when requested resolutions are unsupported', async () => {
+    const job = createJob(['144p']);
+    const { storageService, transcoderService, eventPublisher, configService } =
+      createMocks();
+    const processor = new VideoProcessor(
+      storageService,
+      transcoderService,
+      eventPublisher,
+      configService,
+    );
+
+    await expect(processor.handleVideoProcessing(job)).rejects.toThrow(
+      VIDEO_PROCESSING_ERROR_MESSAGES.REQUESTED_RESOLUTIONS_UNSUPPORTED,
     );
 
     expect(transcoderService.transcodeToHlsVariants).not.toHaveBeenCalled();

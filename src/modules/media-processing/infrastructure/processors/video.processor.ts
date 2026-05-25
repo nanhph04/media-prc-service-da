@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Worker, type Job } from 'bullmq';
 import { ConfigService } from '../../../../shared/infrastructure/config/config.service';
+import { VIDEO_PROCESSING_ERROR_MESSAGES } from '../../application/constants/video-processing-errors.constant';
 import type { VideoProcessingJobData } from '../../application/dtos/video-processing-job-data.dto';
 import {
   getRedisQueueOptions,
@@ -117,7 +118,7 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
       const message =
         error instanceof Error
           ? error.message
-          : 'Unknown video processing error';
+          : VIDEO_PROCESSING_ERROR_MESSAGES.UNKNOWN_PROCESSING_ERROR;
       const stack = error instanceof Error ? error.stack : undefined;
 
       this.logger.error(
@@ -207,7 +208,9 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
       } catch (error: unknown) {
         lastError = error;
         const message =
-          error instanceof Error ? error.message : 'Unknown thumbnail error';
+          error instanceof Error
+            ? error.message
+            : VIDEO_PROCESSING_ERROR_MESSAGES.UNKNOWN_THUMBNAIL_ERROR;
         this.logger.warn(
           `Thumbnail generation attempt ${attempt}/3 failed for videoId=${job.data.videoId}: ${message}`,
         );
@@ -217,7 +220,7 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
     const message =
       lastError instanceof Error
         ? lastError.message
-        : 'Unknown thumbnail error';
+        : VIDEO_PROCESSING_ERROR_MESSAGES.UNKNOWN_THUMBNAIL_ERROR;
     await this.eventPublisher.publishVideoThumbnailFailed({
       videoId: job.data.videoId,
       traceId: job.data.traceId,
@@ -234,7 +237,7 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
 
     const maxDurationSeconds = this.configService.getMaxVideoDurationSeconds();
     if (durationSeconds > maxDurationSeconds) {
-      throw new Error('Video duration exceeds maximum limit of 4 hours');
+      throw new Error(VIDEO_PROCESSING_ERROR_MESSAGES.DURATION_EXCEEDS_LIMIT);
     }
   }
 
@@ -244,7 +247,13 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
   ): TranscodeResolutionName[] {
     if (sourceHeight === undefined || sourceHeight < 480) {
       throw new Error(
-        'Video source resolution is lower than minimum supported 480p',
+        VIDEO_PROCESSING_ERROR_MESSAGES.SOURCE_RESOLUTION_BELOW_MINIMUM,
+      );
+    }
+
+    if (requestedResolutions.length === 0) {
+      throw new Error(
+        VIDEO_PROCESSING_ERROR_MESSAGES.REQUESTED_RESOLUTIONS_REQUIRED,
       );
     }
 
@@ -279,7 +288,7 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
 
     if (orderedResolutions.length === 0) {
       throw new Error(
-        'Video source resolution is lower than minimum supported 480p',
+        VIDEO_PROCESSING_ERROR_MESSAGES.REQUESTED_RESOLUTIONS_UNSUPPORTED,
       );
     }
 
