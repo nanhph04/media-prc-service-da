@@ -107,11 +107,14 @@ describe('VideoProcessor', () => {
     expect(transcoderService.probeVideoMetadata).toHaveBeenCalledWith(
       '/tmp/video-123/input.mp4',
     );
-    expect(transcoderService.transcodeToHlsVariants).toHaveBeenCalledWith({
-      inputPath: '/tmp/video-123/input.mp4',
-      outputDirectory: '/tmp/video-123/hls',
-      resolutions: ['480p', '720p'],
-    });
+    expect(transcoderService.transcodeToHlsVariants).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inputPath: '/tmp/video-123/input.mp4',
+        outputDirectory: '/tmp/video-123/hls',
+        resolutions: ['480p', '720p'],
+        videoId: 'video-123',
+      }),
+    );
     expect(storageService.uploadHlsOutput).toHaveBeenCalledWith(
       'video-123',
       '/tmp/video-123/hls',

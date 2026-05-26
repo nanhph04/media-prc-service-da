@@ -171,6 +171,143 @@ describe('FfmpegTranscoderService', () => {
     expect(outputOptions).not.toContain('-map 0:a:0');
   });
 
+  it('reports throttled HLS progress with estimated segment counts', async () => {
+    ffprobeMock.mockImplementation(
+      (
+        _inputPath: string,
+        callback: (
+          error: Error | undefined,
+          data?: {
+            format?: { duration?: number };
+            streams?: Array<{ codec_type?: string; height?: number }>;
+          },
+        ) => void,
+      ) => {
+        callback(undefined, {
+          format: { duration: 48 },
+          streams: [
+            { codec_type: 'video', height: 720 },
+            { codec_type: 'audio' },
+          ],
+        });
+      },
+    );
+    ffmpegOn.mockImplementation(
+      (
+        eventName: string,
+        handler: (payload?: { percent?: number; timemark?: string }) => void,
+      ) => {
+        if (eventName === 'progress') {
+          setImmediate(() => handler({ percent: 25, timemark: '00:00:12.00' }));
+        }
+        if (eventName === 'end') {
+          setImmediate(() => handler());
+        }
+        return {
+          outputOptions: ffmpegOutputOptions,
+          output: ffmpegOutput,
+          on: ffmpegOn,
+          run: ffmpegRun,
+        };
+      },
+    );
+    const onProgress = jest.fn();
+    const service = new FfmpegTranscoderService({
+      get: jest.fn().mockReturnValue(''),
+    });
+
+    await service.transcodeToHlsVariants({
+      inputPath: '/tmp/input.mp4',
+      outputDirectory: '/tmp/hls',
+      resolutions: ['720p'],
+      videoId: 'video-123',
+      onProgress,
+    });
+
+    expect(onProgress).toHaveBeenCalledWith({
+      resolution: '720p',
+      progressPercent: 25,
+      overallProgressPercent: 25,
+      segmentIndex: 2,
+      totalSegments: 8,
+    });
+    expect(onProgress).toHaveBeenCalledWith({
+      resolution: '720p',
+      progressPercent: 100,
+      overallProgressPercent: 100,
+      segmentIndex: 8,
+      totalSegments: 8,
+    });
+  });
+
+  it('uses configured HLS segment duration for ffmpeg options and segment estimates', async () => {
+    ffprobeMock.mockImplementation(
+      (
+        _inputPath: string,
+        callback: (
+          error: Error | undefined,
+          data?: {
+            format?: { duration?: number };
+            streams?: Array<{ codec_type?: string; height?: number }>;
+          },
+        ) => void,
+      ) => {
+        callback(undefined, {
+          format: { duration: 48 },
+          streams: [
+            { codec_type: 'video', height: 720 },
+            { codec_type: 'audio' },
+          ],
+        });
+      },
+    );
+    ffmpegOn.mockImplementation(
+      (
+        eventName: string,
+        handler: (payload?: { percent?: number; timemark?: string }) => void,
+      ) => {
+        if (eventName === 'progress') {
+          setImmediate(() => handler({ percent: 25, timemark: '00:00:12.00' }));
+        }
+        if (eventName === 'end') {
+          setImmediate(() => handler());
+        }
+        return {
+          outputOptions: ffmpegOutputOptions,
+          output: ffmpegOutput,
+          on: ffmpegOn,
+          run: ffmpegRun,
+        };
+      },
+    );
+    const onProgress = jest.fn();
+    const service = new FfmpegTranscoderService({
+      get: jest
+        .fn()
+        .mockImplementation((key: string, defaultValue: unknown) =>
+          key === 'HLS_SEGMENT_DURATION_SECONDS' ? 12 : defaultValue,
+        ),
+    });
+
+    await service.transcodeToHlsVariants({
+      inputPath: '/tmp/input.mp4',
+      outputDirectory: '/tmp/hls',
+      resolutions: ['720p'],
+      onProgress,
+    });
+
+    expect(ffmpegOutputOptions.mock.calls[0]?.[0]).toEqual(
+      expect.arrayContaining(['-hls_time 12']),
+    );
+    expect(onProgress).toHaveBeenCalledWith({
+      resolution: '720p',
+      progressPercent: 25,
+      overallProgressPercent: 25,
+      segmentIndex: 1,
+      totalSegments: 4,
+    });
+  });
+
   it('rejects when ffmpeg emits error', async () => {
     ffprobeMock.mockImplementation(
       (

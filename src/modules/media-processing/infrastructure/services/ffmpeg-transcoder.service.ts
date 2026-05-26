@@ -1,8 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import ffmpeg from 'fluent-ffmpeg';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { ConfigService } from '../../../../shared/infrastructure/config/config.service';
+
+const DEFAULT_HLS_SEGMENT_DURATION_SECONDS = 6;
+const DEFAULT_TRANSCODE_PROGRESS_LOG_STEP_PERCENT = 10;
 
 export const TRANSCODE_RESOLUTION_PRESETS = [
   {
@@ -48,11 +51,21 @@ export interface HlsVariantTranscodeInput {
   inputPath: string;
   outputDirectory: string;
   resolutions: TranscodeResolutionName[];
+  videoId?: string;
+  onProgress?: (progress: HlsTranscodeProgress) => void;
 }
 
 export interface HlsVariantTranscodeResult {
   durationSeconds?: number;
   resolutions: TranscodeResolutionName[];
+}
+
+export interface HlsTranscodeProgress {
+  resolution: TranscodeResolutionName;
+  progressPercent: number;
+  overallProgressPercent: number;
+  segmentIndex?: number;
+  totalSegments?: number;
 }
 
 export interface ThumbnailGenerationInput {
@@ -69,8 +82,20 @@ export interface ThumbnailGenerationResult {
 
 @Injectable()
 export class FfmpegTranscoderService {
+  private readonly logger = new Logger(FfmpegTranscoderService.name);
+  private readonly hlsSegmentDurationSeconds: number;
+  private readonly transcodeProgressLogStepPercent: number;
+
   constructor(private readonly configService: ConfigService) {
     const ffmpegPath = this.configService.get<string>('FFMPEG_PATH', '');
+    this.hlsSegmentDurationSeconds = this.getPositiveNumberConfig(
+      'HLS_SEGMENT_DURATION_SECONDS',
+      DEFAULT_HLS_SEGMENT_DURATION_SECONDS,
+    );
+    this.transcodeProgressLogStepPercent = this.getPositiveNumberConfig(
+      'TRANSCODE_PROGRESS_LOG_STEP_PERCENT',
+      DEFAULT_TRANSCODE_PROGRESS_LOG_STEP_PERCENT,
+    );
 
     if (ffmpegPath.length > 0) {
       ffmpeg.setFfmpegPath(ffmpegPath);
@@ -124,14 +149,43 @@ export class FfmpegTranscoderService {
     const metadata = await this.probeVideoMetadata(input.inputPath);
     await mkdir(input.outputDirectory, { recursive: true });
     await mkdir(join(input.outputDirectory, 'segments'), { recursive: true });
+    const totalSegments = this.estimateTotalSegments(metadata.durationSeconds);
 
-    for (const resolutionName of input.resolutions) {
+    for (const [variantIndex, resolutionName] of input.resolutions.entries()) {
       const preset = this.getPresetOrThrow(resolutionName);
+      this.logger.log(
+        this.buildTranscodeStartMessage(
+          input.videoId,
+          resolutionName,
+          totalSegments,
+        ),
+      );
       await this.transcodeSingleVariant(
         input.inputPath,
         input.outputDirectory,
         preset,
         metadata.hasAudioStream,
+        metadata.durationSeconds,
+        totalSegments,
+        input.videoId,
+        (progress) => {
+          const overallProgressPercent = this.calculateOverallProgressPercent(
+            variantIndex,
+            input.resolutions.length,
+            progress.progressPercent,
+          );
+          input.onProgress?.({
+            ...progress,
+            overallProgressPercent,
+          });
+        },
+      );
+      this.logger.log(
+        this.buildTranscodeCompleteMessage(
+          input.videoId,
+          resolutionName,
+          totalSegments,
+        ),
       );
     }
 
@@ -197,6 +251,12 @@ export class FfmpegTranscoderService {
     outputDirectory: string,
     preset: (typeof TRANSCODE_RESOLUTION_PRESETS)[number],
     hasAudioStream: boolean,
+    durationSeconds: number | undefined,
+    totalSegments: number | undefined,
+    videoId: string | undefined,
+    onProgress: (
+      progress: Omit<HlsTranscodeProgress, 'overallProgressPercent'>,
+    ) => void,
   ): Promise<void> {
     const variantPlaylistPath = join(outputDirectory, `${preset.name}.m3u8`);
     const segmentPattern = join(
@@ -209,6 +269,9 @@ export class FfmpegTranscoderService {
 
     return new Promise<void>((resolve, reject) => {
       const stderrLines: string[] = [];
+      const progressLogState = {
+        lastLoggedStepPercent: 0,
+      };
 
       ffmpeg(inputPath)
         .outputOptions(
@@ -218,7 +281,41 @@ export class FfmpegTranscoderService {
         .on('stderr', (line: string) => {
           stderrLines.push(line.trim());
         })
-        .on('end', () => resolve())
+        .on('progress', (progress: FfmpegProgressPayload) => {
+          const resolvedProgress = this.resolveHlsProgress(
+            progress,
+            preset.name,
+            durationSeconds,
+            totalSegments,
+          );
+          if (!resolvedProgress) {
+            return;
+          }
+
+          if (
+            this.shouldLogProgress(
+              resolvedProgress.progressPercent,
+              progressLogState.lastLoggedStepPercent,
+            )
+          ) {
+            progressLogState.lastLoggedStepPercent = this.toProgressStepPercent(
+              resolvedProgress.progressPercent,
+            );
+            this.logger.log(
+              this.buildTranscodeProgressMessage(videoId, resolvedProgress),
+            );
+            onProgress(resolvedProgress);
+          }
+        })
+        .on('end', () => {
+          onProgress({
+            resolution: preset.name,
+            progressPercent: 100,
+            segmentIndex: totalSegments,
+            totalSegments,
+          });
+          resolve();
+        })
         .on('error', (error: Error) => {
           const stderr = stderrLines.filter(Boolean).slice(-10).join('\n');
           const message =
@@ -245,7 +342,7 @@ export class FfmpegTranscoderService {
       `-bufsize:v:0 ${preset.bufferSize}`,
       `-vf scale=w=${preset.width}:h=${preset.height}:force_original_aspect_ratio=decrease,pad=${preset.width}:${preset.height}:(ow-iw)/2:(oh-ih)/2`,
       '-f hls',
-      '-hls_time 6',
+      `-hls_time ${this.hlsSegmentDurationSeconds}`,
       '-hls_playlist_type vod',
       '-hls_segment_filename',
       segmentPattern,
@@ -302,4 +399,198 @@ export class FfmpegTranscoderService {
 
     return preset;
   }
+
+  private estimateTotalSegments(durationSeconds?: number): number | undefined {
+    if (durationSeconds === undefined || durationSeconds <= 0) {
+      return undefined;
+    }
+
+    return Math.ceil(durationSeconds / this.hlsSegmentDurationSeconds);
+  }
+
+  private resolveHlsProgress(
+    progress: FfmpegProgressPayload,
+    resolution: TranscodeResolutionName,
+    durationSeconds: number | undefined,
+    totalSegments: number | undefined,
+  ): Omit<HlsTranscodeProgress, 'overallProgressPercent'> | undefined {
+    const elapsedSeconds = this.parseTimemarkToSeconds(progress.timemark);
+    const progressPercent = this.resolveProgressPercent(
+      progress.percent,
+      elapsedSeconds,
+      durationSeconds,
+    );
+
+    if (progressPercent === undefined) {
+      return undefined;
+    }
+
+    const segmentIndex =
+      elapsedSeconds !== undefined && totalSegments !== undefined
+        ? Math.min(
+            totalSegments,
+            Math.max(
+              0,
+              Math.ceil(elapsedSeconds / this.hlsSegmentDurationSeconds),
+            ),
+          )
+        : undefined;
+
+    return {
+      resolution,
+      progressPercent,
+      segmentIndex,
+      totalSegments,
+    };
+  }
+
+  private resolveProgressPercent(
+    ffmpegPercent: number | undefined,
+    elapsedSeconds: number | undefined,
+    durationSeconds: number | undefined,
+  ): number | undefined {
+    const rawPercent =
+      ffmpegPercent ??
+      (elapsedSeconds !== undefined &&
+      durationSeconds !== undefined &&
+      durationSeconds > 0
+        ? (elapsedSeconds / durationSeconds) * 100
+        : undefined);
+
+    if (rawPercent === undefined || !Number.isFinite(rawPercent)) {
+      return undefined;
+    }
+
+    return Math.min(100, Math.max(0, Math.round(rawPercent)));
+  }
+
+  private parseTimemarkToSeconds(timemark?: string): number | undefined {
+    if (!timemark) {
+      return undefined;
+    }
+
+    const parts = timemark.split(':');
+    if (parts.length !== 3) {
+      return undefined;
+    }
+
+    const [hours, minutes, seconds] = parts.map(Number);
+    if (
+      hours === undefined ||
+      minutes === undefined ||
+      seconds === undefined ||
+      !Number.isFinite(hours) ||
+      !Number.isFinite(minutes) ||
+      !Number.isFinite(seconds)
+    ) {
+      return undefined;
+    }
+
+    return hours * 3600 + minutes * 60 + seconds;
+  }
+
+  private shouldLogProgress(
+    progressPercent: number,
+    lastLoggedStepPercent: number,
+  ): boolean {
+    const currentStepPercent = this.toProgressStepPercent(progressPercent);
+
+    return currentStepPercent > 0 && currentStepPercent > lastLoggedStepPercent;
+  }
+
+  private toProgressStepPercent(progressPercent: number): number {
+    return (
+      Math.floor(progressPercent / this.transcodeProgressLogStepPercent) *
+      this.transcodeProgressLogStepPercent
+    );
+  }
+
+  private calculateOverallProgressPercent(
+    variantIndex: number,
+    variantCount: number,
+    variantProgressPercent: number,
+  ): number {
+    if (variantCount <= 0) {
+      return 0;
+    }
+
+    return Math.round(
+      ((variantIndex + variantProgressPercent / 100) / variantCount) * 100,
+    );
+  }
+
+  private buildTranscodeStartMessage(
+    videoId: string | undefined,
+    resolution: TranscodeResolutionName,
+    totalSegments: number | undefined,
+  ): string {
+    return [
+      'Starting HLS transcode',
+      this.formatVideoId(videoId),
+      `resolution=${resolution}`,
+      this.formatEstimatedSegments(totalSegments),
+    ]
+      .filter(Boolean)
+      .join(' ');
+  }
+
+  private buildTranscodeProgressMessage(
+    videoId: string | undefined,
+    progress: Omit<HlsTranscodeProgress, 'overallProgressPercent'>,
+  ): string {
+    return [
+      'HLS transcode progress',
+      this.formatVideoId(videoId),
+      `resolution=${progress.resolution}`,
+      `progress=${progress.progressPercent}%`,
+      this.formatSegmentProgress(progress.segmentIndex, progress.totalSegments),
+    ]
+      .filter(Boolean)
+      .join(' ');
+  }
+
+  private buildTranscodeCompleteMessage(
+    videoId: string | undefined,
+    resolution: TranscodeResolutionName,
+    totalSegments: number | undefined,
+  ): string {
+    return [
+      'Completed HLS transcode',
+      this.formatVideoId(videoId),
+      `resolution=${resolution}`,
+      this.formatEstimatedSegments(totalSegments),
+    ]
+      .filter(Boolean)
+      .join(' ');
+  }
+
+  private formatVideoId(videoId?: string): string {
+    return videoId ? `videoId=${videoId}` : '';
+  }
+
+  private formatEstimatedSegments(totalSegments?: number): string {
+    return totalSegments !== undefined
+      ? `estimatedSegments=${totalSegments}`
+      : '';
+  }
+
+  private formatSegmentProgress(
+    segmentIndex?: number,
+    totalSegments?: number,
+  ): string {
+    return segmentIndex !== undefined && totalSegments !== undefined
+      ? `segment=${segmentIndex}/${totalSegments}`
+      : '';
+  }
+
+  private getPositiveNumberConfig(key: string, defaultValue: number): number {
+    const value = this.configService.get<number>(key, defaultValue);
+
+    return Number.isFinite(value) && value > 0 ? value : defaultValue;
+  }
+}
+
+interface FfmpegProgressPayload {
+  percent?: number;
+  timemark?: string;
 }

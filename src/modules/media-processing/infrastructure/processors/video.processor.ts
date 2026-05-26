@@ -15,6 +15,7 @@ import {
 import { KafkaEventPublisher } from '../messaging/kafka-event-publisher';
 import {
   FfmpegTranscoderService,
+  type HlsTranscodeProgress,
   TRANSCODE_RESOLUTION_PRESETS,
   type TranscodeResolutionName,
 } from '../services/ffmpeg-transcoder.service';
@@ -93,6 +94,10 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
           inputPath: paths.inputPath,
           outputDirectory: paths.outputDirectory,
           resolutions: normalizedResolutions,
+          videoId,
+          onProgress: (progress) => {
+            this.updateHlsJobProgress(job, progress);
+          },
         });
 
       await job.updateProgress(75);
@@ -293,5 +298,40 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
     }
 
     return orderedResolutions;
+  }
+
+  private mapHlsProgressToJobProgress(progress: HlsTranscodeProgress): number {
+    const transcodeStartProgress = 35;
+    const transcodeEndProgress = 75;
+    const transcodeProgressRange =
+      transcodeEndProgress - transcodeStartProgress;
+
+    return Math.min(
+      transcodeEndProgress,
+      Math.max(
+        transcodeStartProgress,
+        Math.round(
+          transcodeStartProgress +
+            (progress.overallProgressPercent / 100) * transcodeProgressRange,
+        ),
+      ),
+    );
+  }
+
+  private updateHlsJobProgress(
+    job: Job<VideoProcessingJobData>,
+    progress: HlsTranscodeProgress,
+  ): void {
+    const jobProgress = this.mapHlsProgressToJobProgress(progress);
+
+    void job.updateProgress(jobProgress).catch((error: unknown) => {
+      const message =
+        error instanceof Error
+          ? error.message
+          : VIDEO_PROCESSING_ERROR_MESSAGES.UNKNOWN_PROCESSING_ERROR;
+      this.logger.warn(
+        `Failed to update video processing progress for videoId=${job.data.videoId}, progress=${jobProgress}: ${message}`,
+      );
+    });
   }
 }
