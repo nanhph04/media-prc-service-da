@@ -24,6 +24,7 @@ export interface MinioStorageOptions {
 
 export interface RedisQueueOptions {
   queueName: string;
+  workerConcurrency: number;
   connection: {
     host: string;
     port: number;
@@ -115,12 +116,17 @@ export const getRedisQueueOptions = (
   configService: ConfigService,
 ): RedisQueueOptions => {
   const password = configService.get<string>('REDIS_PASSWORD', '');
+  const workerConcurrency = Math.max(
+    configService.get<number>('MEDIA_PROCESSING_CONCURRENCY', 1),
+    1,
+  );
 
   return {
     queueName: configService.get<string>(
       'BULLMQ_QUEUE_NAME',
       DEFAULT_VIDEO_PROCESSING_QUEUE_NAME,
     ),
+    workerConcurrency,
     connection: {
       host: configService.get<string>('REDIS_HOST', 'localhost'),
       port: configService.get<number>('REDIS_PORT', 6379),

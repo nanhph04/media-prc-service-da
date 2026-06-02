@@ -1,4 +1,4 @@
-import type { Job } from 'bullmq';
+import { Worker, type Job } from 'bullmq';
 import { ConfigService } from '../../../../shared/infrastructure/config/config.service';
 import { VIDEO_PROCESSING_ERROR_MESSAGES } from '../../application/constants/video-processing-errors.constant';
 import type { VideoProcessingJobData } from '../../application/dtos/video-processing-job-data.dto';
@@ -8,7 +8,18 @@ import { VideoProcessor } from './video.processor';
 import type { FfmpegTranscoderService } from '../services/ffmpeg-transcoder.service';
 import type { MinioStorageService } from '../storage/minio-storage.service';
 
+jest.mock('bullmq', () => ({
+  Worker: jest.fn().mockImplementation(() => ({
+    close: jest.fn().mockResolvedValue(undefined),
+    on: jest.fn(),
+  })),
+}));
+
 describe('VideoProcessor', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
   const createJob = (
     resolution: string[] = ['720p'],
     data: Partial<VideoProcessingJobData> = {},
@@ -362,5 +373,40 @@ describe('VideoProcessor', () => {
     expect(transcoderService.transcodeToHlsVariants).not.toHaveBeenCalled();
     expect(eventPublisher.publishVideoProcessedSuccess).not.toHaveBeenCalled();
     expect(eventPublisher.publishVideoProcessedFailed).not.toHaveBeenCalled();
+  });
+
+  it('starts BullMQ worker with configured concurrency', () => {
+    const { storageService, transcoderService, eventPublisher, configService } =
+      createMocks();
+    configService.get.mockImplementation(
+      (key: string, defaultValue: string | number | boolean) => {
+        if (key === 'MEDIA_PROCESSING_CONCURRENCY') {
+          return 4;
+        }
+        return defaultValue;
+      },
+    );
+    const processor = new VideoProcessor(
+      storageService,
+      transcoderService,
+      eventPublisher,
+      configService,
+    );
+
+    processor.onModuleInit();
+
+    expect(Worker).toHaveBeenCalledWith(
+      'video-processing',
+      expect.any(Function),
+      expect.objectContaining({
+        concurrency: 4,
+        connection: {
+          host: 'localhost',
+          port: 6379,
+          password: undefined,
+          db: 0,
+        },
+      }),
+    );
   });
 });

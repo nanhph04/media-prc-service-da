@@ -41,7 +41,11 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
       async (job) => this.handleVideoProcessing(job),
       {
         connection: queueOptions.connection,
+        concurrency: queueOptions.workerConcurrency,
       },
+    );
+    this.logger.log(
+      `Video processing worker started queue=${queueOptions.queueName}, concurrency=${queueOptions.workerConcurrency}`,
     );
     this.worker.on('failed', (job, error) => {
       void this.publishFinalFailureIfNeeded(job, error);

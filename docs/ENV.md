@@ -36,7 +36,9 @@ MINIO_PUBLIC_USE_SSL=
 FFMPEG_PATH=
 VIDEO_MAX_DURATION_SECONDS=14400
 MEDIA_PROCESSING_TMP_DIR=/tmp/media-processing
+MEDIA_PROCESSING_CONCURRENCY=1
 ```
 
 - Auto thumbnail output is JPEG.
 - Default target key is supplied by Media Service: `videos/{videoId}/thumbnails/default.jpg`.
+- `MEDIA_PROCESSING_CONCURRENCY` controls how many BullMQ video jobs one service process can run at the same time. Values below `1` are treated as `1`; higher values run more FFmpeg jobs concurrently and should be sized for available CPU, memory, and disk I/O.

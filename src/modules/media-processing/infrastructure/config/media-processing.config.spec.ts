@@ -35,12 +35,14 @@ describe('media-processing config', () => {
     delete process.env.REDIS_PORT;
     delete process.env.REDIS_PASSWORD;
     delete process.env.REDIS_DB;
+    delete process.env.MEDIA_PROCESSING_CONCURRENCY;
     const options = getRedisQueueOptions(new ConfigService());
 
     expect(TRANSCODE_JOB_NAME).toBe('transcode-job');
     expect(DEFAULT_VIDEO_PROCESSING_QUEUE_NAME).toBe('video-processing');
     expect(options).toEqual({
       queueName: 'video-processing',
+      workerConcurrency: 1,
       connection: {
         host: 'localhost',
         port: 6379,
@@ -56,10 +58,12 @@ describe('media-processing config', () => {
     process.env.REDIS_PORT = '6380';
     process.env.REDIS_PASSWORD = 'secret';
     process.env.REDIS_DB = '2';
+    process.env.MEDIA_PROCESSING_CONCURRENCY = '4';
     const options = getRedisQueueOptions(new ConfigService());
 
     expect(options).toEqual({
       queueName: 'custom-video-processing',
+      workerConcurrency: 4,
       connection: {
         host: 'redis',
         port: 6380,
@@ -67,6 +71,17 @@ describe('media-processing config', () => {
         db: 2,
       },
     });
+  });
+
+  it('clamps invalid media processing concurrency to one', () => {
+    process.env.MEDIA_PROCESSING_CONCURRENCY = '0';
+    expect(getRedisQueueOptions(new ConfigService()).workerConcurrency).toBe(1);
+
+    process.env.MEDIA_PROCESSING_CONCURRENCY = '-3';
+    expect(getRedisQueueOptions(new ConfigService()).workerConcurrency).toBe(1);
+
+    process.env.MEDIA_PROCESSING_CONCURRENCY = 'invalid';
+    expect(getRedisQueueOptions(new ConfigService()).workerConcurrency).toBe(1);
   });
 
   it('supports KAFKA_BROKERS with KAFKA_BROKER fallback', () => {
