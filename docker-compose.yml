@@ -1,0 +1,61 @@
+name: media-system
+
+services:
+  media-processing-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: media-processing-service:local
+    container_name: media-processing-service
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 4003
+
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ""
+      REDIS_DB: 0
+      BULLMQ_QUEUE_NAME: video-processing
+
+      KAFKA_BROKER: kafka:29092
+      KAFKA_BROKERS: kafka:29092
+      KAFKA_VIDEO_PROCESSED_SUCCESS_TOPIC: video.processed.success
+      KAFKA_VIDEO_PROCESSED_FAILED_TOPIC: video.processed.failed
+      KAFKA_VIDEO_THUMBNAIL_GENERATED_TOPIC: video.thumbnail.generated
+      KAFKA_VIDEO_THUMBNAIL_FAILED_TOPIC: video.thumbnail.failed
+      KAFKA_VIDEO_PROGRESS_UPDATED_TOPIC: video.progress.updated
+      KAFKAJS_NO_PARTITIONER_WARNING: 1
+
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_USE_SSL: "false"
+      MINIO_ACCESS_KEY: admin
+      MINIO_SECRET_KEY: admin123
+      MINIO_RAW_BUCKET: media-raw
+      MINIO_PROCESSED_BUCKET: media-processed
+      MINIO_PUBLIC_BUCKET: media-public
+      MINIO_PUBLIC_ENDPOINT: localhost
+      MINIO_PUBLIC_PORT: 19000
+      MINIO_PUBLIC_USE_SSL: "false"
+
+      MEDIA_PROCESSING_TMP_DIR: /tmp/media-processing
+      MEDIA_PROCESSING_CONCURRENCY: 1
+      FFMPEG_PATH: /usr/bin/ffmpeg
+      VIDEO_MAX_DURATION_SECONDS: 14400
+      HLS_SEGMENT_DURATION_SECONDS: 6
+      TRANSCODE_PROGRESS_LOG_STEP_PERCENT: 10
+    ports:
+      - "4003:4003"
+    volumes:
+      - media-processing-tmp:/tmp/media-processing
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    external: true
+    name: app-network
+
+volumes:
+  media-processing-tmp:
