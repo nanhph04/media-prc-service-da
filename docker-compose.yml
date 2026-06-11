@@ -35,7 +35,7 @@ services:
       MINIO_RAW_BUCKET: media-raw
       MINIO_PROCESSED_BUCKET: media-processed
       MINIO_PUBLIC_BUCKET: media-public
-      MINIO_PUBLIC_ENDPOINT: localhost
+      MINIO_PUBLIC_ENDPOINT: ${PUBLIC_HOST:-localhost}
       MINIO_PUBLIC_PORT: 19000
       MINIO_PUBLIC_USE_SSL: "false"
 
