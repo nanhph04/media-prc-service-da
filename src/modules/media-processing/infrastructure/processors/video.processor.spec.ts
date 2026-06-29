@@ -145,6 +145,31 @@ describe('VideoProcessor', () => {
     );
   });
 
+  it('cleans stale local work files before retrying processing', async () => {
+    const job = createJob(['720p']);
+    const { storageService, transcoderService, eventPublisher, configService } =
+      createMocks();
+    const processor = new VideoProcessor(
+      storageService,
+      transcoderService,
+      eventPublisher,
+      configService,
+    );
+
+    await processor.handleVideoProcessing(job);
+
+    expect(storageService.cleanupLocalDirectory).toHaveBeenNthCalledWith(
+      1,
+      '/tmp/video-123',
+    );
+    expect(
+      (storageService.cleanupLocalDirectory as jest.Mock).mock
+        .invocationCallOrder[0],
+    ).toBeLessThan(
+      (storageService.downloadRawVideo as jest.Mock).mock.invocationCallOrder[0],
+    );
+  });
+
   it('uploads generated thumbnails to the target bucket from the job payload', async () => {
     const job = createJob(['720p'], {
       thumbnailTargetObjectKey: 'videos/video-123/thumbnails/default.jpg',

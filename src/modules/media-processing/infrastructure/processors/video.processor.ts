@@ -70,6 +70,7 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
     const paths = this.storageService.createWorkPaths(videoId);
 
     try {
+      await this.storageService.cleanupLocalDirectory(paths.workDirectory);
       await job.updateProgress(5);
       this.logger.log(
         `Starting video processing for videoId=${videoId}, rawFileKey=${rawFileKey}`,
