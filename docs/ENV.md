@@ -36,9 +36,14 @@ MINIO_PUBLIC_USE_SSL=
 FFMPEG_PATH=
 VIDEO_MAX_DURATION_SECONDS=14400
 MEDIA_PROCESSING_TMP_DIR=/tmp/media-processing
-MEDIA_PROCESSING_CONCURRENCY=1
+MEDIA_PROCESSING_CONCURRENCY=2
+MEDIA_PROCESSING_FFMPEG_THREADS=2
+MEDIA_PROCESSING_CPUS=4
+MEDIA_PROCESSING_MEMORY=4g
 ```
 
 - Auto thumbnail output is JPEG.
 - Default target key is supplied by Media Service: `videos/{videoId}/thumbnails/default.jpg`.
-- `MEDIA_PROCESSING_CONCURRENCY` controls how many BullMQ video jobs one service process can run at the same time. Values below `1` are treated as `1`; higher values run more FFmpeg jobs concurrently and should be sized for available CPU, memory, and disk I/O.
+- `MEDIA_PROCESSING_CONCURRENCY` controls how many BullMQ video jobs one service process can run at the same time. Values below `1` are treated as `1`; set this above `1` to process multiple transcode jobs in parallel. Higher values run more FFmpeg jobs concurrently and should be sized for available CPU, memory, and disk I/O.
+- `MEDIA_PROCESSING_FFMPEG_THREADS` limits FFmpeg worker thread usage per transcode/thumbnail command with `-threads`.
+- `MEDIA_PROCESSING_CPUS` and `MEDIA_PROCESSING_MEMORY` set Docker Compose CPU and memory limits for the processing container.

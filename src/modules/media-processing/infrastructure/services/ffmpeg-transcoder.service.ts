@@ -6,6 +6,7 @@ import { ConfigService } from '../../../../shared/infrastructure/config/config.s
 
 const DEFAULT_HLS_SEGMENT_DURATION_SECONDS = 6;
 const DEFAULT_TRANSCODE_PROGRESS_LOG_STEP_PERCENT = 10;
+const DEFAULT_FFMPEG_THREADS = 2;
 
 export const TRANSCODE_RESOLUTION_PRESETS = [
   {
@@ -84,6 +85,7 @@ export interface ThumbnailGenerationResult {
 export class FfmpegTranscoderService {
   private readonly logger = new Logger(FfmpegTranscoderService.name);
   private readonly hlsSegmentDurationSeconds: number;
+  private readonly ffmpegThreads: number;
   private readonly transcodeProgressLogStepPercent: number;
 
   constructor(private readonly configService: ConfigService) {
@@ -95,6 +97,10 @@ export class FfmpegTranscoderService {
     this.transcodeProgressLogStepPercent = this.getPositiveNumberConfig(
       'TRANSCODE_PROGRESS_LOG_STEP_PERCENT',
       DEFAULT_TRANSCODE_PROGRESS_LOG_STEP_PERCENT,
+    );
+    this.ffmpegThreads = this.getPositiveIntegerConfig(
+      'MEDIA_PROCESSING_FFMPEG_THREADS',
+      DEFAULT_FFMPEG_THREADS,
     );
 
     if (ffmpegPath.length > 0) {
@@ -212,6 +218,7 @@ export class FfmpegTranscoderService {
         .outputOptions([
           `-ss ${capturedAtSecond}`,
           '-frames:v 1',
+          `-threads ${this.ffmpegThreads}`,
           '-q:v 3',
           '-vf scale=w=1280:h=-2:force_original_aspect_ratio=decrease',
         ])
@@ -333,6 +340,7 @@ export class FfmpegTranscoderService {
   ): string[] {
     const outputOptions = [
       '-preset veryfast',
+      `-threads ${this.ffmpegThreads}`,
       '-g 48',
       '-sc_threshold 0',
       '-map 0:v:0',
@@ -587,6 +595,12 @@ export class FfmpegTranscoderService {
     const value = this.configService.get<number>(key, defaultValue);
 
     return Number.isFinite(value) && value > 0 ? value : defaultValue;
+  }
+
+  private getPositiveIntegerConfig(key: string, defaultValue: number): number {
+    const value = this.getPositiveNumberConfig(key, defaultValue);
+
+    return Math.max(Math.trunc(value), 1);
   }
 }
 

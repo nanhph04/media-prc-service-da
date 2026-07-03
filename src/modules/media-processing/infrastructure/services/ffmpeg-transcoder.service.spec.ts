@@ -99,6 +99,7 @@ describe('FfmpegTranscoderService', () => {
     expect(ffmpegOutputOptions.mock.calls[0]?.[0]).toEqual(
       expect.arrayContaining([
         '-map 0:a:0',
+        '-threads 2',
         '-hls_segment_filename',
         expect.stringContaining('480p_%03d.ts'),
       ]),
@@ -106,6 +107,7 @@ describe('FfmpegTranscoderService', () => {
     expect(ffmpegOutputOptions.mock.calls[1]?.[0]).toEqual(
       expect.arrayContaining([
         '-map 0:a:0',
+        '-threads 2',
         '-hls_segment_filename',
         expect.stringContaining('1080p_%03d.ts'),
       ]),
@@ -168,6 +170,7 @@ describe('FfmpegTranscoderService', () => {
     const outputOptions = ffmpegOutputOptions.mock.calls[0]?.[0] as string[];
 
     expect(outputOptions).toContain('-an');
+    expect(outputOptions).toContain('-threads 2');
     expect(outputOptions).not.toContain('-map 0:a:0');
   });
 
@@ -297,7 +300,7 @@ describe('FfmpegTranscoderService', () => {
     });
 
     expect(ffmpegOutputOptions.mock.calls[0]?.[0]).toEqual(
-      expect.arrayContaining(['-hls_time 12']),
+      expect.arrayContaining(['-hls_time 12', '-threads 2']),
     );
     expect(onProgress).toHaveBeenCalledWith({
       resolution: '720p',
@@ -353,6 +356,69 @@ describe('FfmpegTranscoderService', () => {
         resolutions: ['720p'],
       }),
     ).rejects.toThrow('ffmpeg failed');
+  });
+
+  it('uses configured FFmpeg thread limit for transcode and thumbnail commands', async () => {
+    ffprobeMock.mockImplementation(
+      (
+        _inputPath: string,
+        callback: (
+          error: Error | undefined,
+          data?: {
+            format?: { duration?: number };
+            streams?: Array<{
+              codec_type?: string;
+              width?: number;
+              height?: number;
+            }>;
+          },
+        ) => void,
+      ) => {
+        callback(undefined, {
+          format: { duration: 10 },
+          streams: [
+            { codec_type: 'video', width: 1280, height: 720 },
+            { codec_type: 'audio' },
+          ],
+        });
+      },
+    );
+    ffmpegOn.mockImplementation((eventName: string, handler: () => void) => {
+      if (eventName === 'end') {
+        setImmediate(handler);
+      }
+      return {
+        outputOptions: ffmpegOutputOptions,
+        output: ffmpegOutput,
+        on: ffmpegOn,
+        run: ffmpegRun,
+      };
+    });
+    const service = new FfmpegTranscoderService({
+      get: jest
+        .fn()
+        .mockImplementation((key: string, defaultValue: unknown) =>
+          key === 'MEDIA_PROCESSING_FFMPEG_THREADS' ? 3 : defaultValue,
+        ),
+    });
+
+    await service.transcodeToHlsVariants({
+      inputPath: '/tmp/input.mp4',
+      outputDirectory: '/tmp/hls',
+      resolutions: ['720p'],
+    });
+    await service.generateThumbnail({
+      inputPath: '/tmp/input.mp4',
+      outputPath: '/tmp/thumbnail.jpg',
+      durationSeconds: 10,
+    });
+
+    expect(ffmpegOutputOptions.mock.calls[0]?.[0]).toEqual(
+      expect.arrayContaining(['-threads 3']),
+    );
+    expect(ffmpegOutputOptions.mock.calls[1]?.[0]).toEqual(
+      expect.arrayContaining(['-threads 3']),
+    );
   });
 
   it('uses configured ffmpeg binary path when provided', () => {

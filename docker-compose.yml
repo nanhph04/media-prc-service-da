@@ -8,6 +8,8 @@ services:
     image: media-processing-service:local
     container_name: media-processing-service
     restart: unless-stopped
+    cpus: "${MEDIA_PROCESSING_CPUS:-4}"
+    mem_limit: "${MEDIA_PROCESSING_MEMORY:-4g}"
     environment:
       NODE_ENV: production
       PORT: 4003
@@ -40,7 +42,8 @@ services:
       MINIO_PUBLIC_USE_SSL: "false"
 
       MEDIA_PROCESSING_TMP_DIR: /tmp/media-processing
-      MEDIA_PROCESSING_CONCURRENCY: 1
+      MEDIA_PROCESSING_CONCURRENCY: "${MEDIA_PROCESSING_CONCURRENCY:-2}"
+      MEDIA_PROCESSING_FFMPEG_THREADS: "${MEDIA_PROCESSING_FFMPEG_THREADS:-2}"
       FFMPEG_PATH: /usr/bin/ffmpeg
       VIDEO_MAX_DURATION_SECONDS: 14400
       HLS_SEGMENT_DURATION_SECONDS: 6
