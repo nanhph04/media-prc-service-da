@@ -3,6 +3,7 @@ import {
   Logger,
   OnModuleDestroy,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { Worker, type Job } from 'bullmq';
 import { ConfigService } from '../../../../shared/infrastructure/config/config.service';
@@ -13,6 +14,7 @@ import {
   TRANSCODE_JOB_NAME,
 } from '../config/media-processing.config';
 import { KafkaEventPublisher } from '../messaging/kafka-event-publisher';
+import { VideoProcessingFailureNotificationQueue } from '../queue/video-processing-failure-notification.queue';
 import {
   FfmpegTranscoderService,
   type HlsTranscodeProgress,
@@ -32,6 +34,8 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
     private readonly transcoderService: FfmpegTranscoderService,
     private readonly eventPublisher: KafkaEventPublisher,
     private readonly configService: ConfigService,
+    @Optional()
+    private readonly failureNotificationQueue?: VideoProcessingFailureNotificationQueue,
   ) {}
 
   onModuleInit(): void {
@@ -48,7 +52,18 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
       `Video processing worker started queue=${queueOptions.queueName}, concurrency=${queueOptions.workerConcurrency}`,
     );
     this.worker.on('failed', (job, error) => {
-      void this.publishFinalFailureIfNeeded(job, error);
+      void this.publishFinalFailureIfNeeded(job, error).catch(
+        (publishError: unknown) => {
+          const message =
+            publishError instanceof Error
+              ? publishError.message
+              : VIDEO_PROCESSING_ERROR_MESSAGES.UNKNOWN_PROCESSING_ERROR;
+          this.logger.error(
+            `Failed to enqueue final video processing failure notification: ${message}`,
+            publishError instanceof Error ? publishError.stack : undefined,
+          );
+        },
+      );
     });
   }
 
@@ -163,20 +178,16 @@ export class VideoProcessor implements OnModuleInit, OnModuleDestroy {
         ? `Video processing failed after ${maxAttempts} attempts: ${error.message}`
         : error.message;
 
-    await this.eventPublisher.publishVideoProcessedFailed({
+    if (!this.failureNotificationQueue) {
+      throw new Error('Failure notification queue is not configured');
+    }
+
+    await this.failureNotificationQueue.enqueueFinalFailure({
       videoId: job.data.videoId,
       traceId: job.data.traceId,
       errorMessage,
+      shouldPublishThumbnailFailed: Boolean(job.data.thumbnailTargetObjectKey),
     });
-    if (job.data.thumbnailTargetObjectKey) {
-      await this.eventPublisher.publishVideoThumbnailFailed({
-        videoId: job.data.videoId,
-        traceId: job.data.traceId,
-        reasonCode: 'UNKNOWN',
-        message: errorMessage,
-        retryable: false,
-      });
-    }
   }
 
   private async generateThumbnailIfRequested(

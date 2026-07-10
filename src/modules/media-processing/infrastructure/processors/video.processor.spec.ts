@@ -44,6 +44,9 @@ describe('VideoProcessor', () => {
     transcoderService: jest.Mocked<FfmpegTranscoderService>;
     eventPublisher: jest.Mocked<KafkaEventPublisher>;
     configService: jest.Mocked<ConfigService>;
+    failureNotificationQueue: {
+      enqueueFinalFailure: jest.Mock;
+    };
   } => ({
     storageService: {
       downloadRawVideo: jest.fn().mockResolvedValue('/tmp/video-123/input.mp4'),
@@ -96,7 +99,21 @@ describe('VideoProcessor', () => {
             defaultValue,
         ),
     } as unknown as jest.Mocked<ConfigService>,
+    failureNotificationQueue: {
+      enqueueFinalFailure: jest.fn().mockResolvedValue(undefined),
+    },
   });
+
+  const createProcessorWithFailureQueue = (
+    mocks: ReturnType<typeof createMocks>,
+  ): VideoProcessor =>
+    new (VideoProcessor as unknown as new (...args: unknown[]) => VideoProcessor)(
+      mocks.storageService,
+      mocks.transcoderService,
+      mocks.eventPublisher,
+      mocks.configService,
+      mocks.failureNotificationQueue,
+    );
 
   it('downloads, probes, transcodes, uploads, publishes success, and cleans up', async () => {
     const job = createJob(['480p', '1080p']);
@@ -325,14 +342,9 @@ describe('VideoProcessor', () => {
       opts: { attempts: 3 },
       attemptsMade: 2,
     } as Job<VideoProcessingJobData>;
-    const { storageService, transcoderService, eventPublisher, configService } =
-      createMocks();
-    const processor = new VideoProcessor(
-      storageService,
-      transcoderService,
-      eventPublisher,
-      configService,
-    );
+    const mocks = createMocks();
+    const { eventPublisher, failureNotificationQueue } = mocks;
+    const processor = createProcessorWithFailureQueue(mocks);
 
     await (
       processor as unknown as {
@@ -344,22 +356,18 @@ describe('VideoProcessor', () => {
     ).publishFinalFailureIfNeeded(job, new Error('ffmpeg failed'));
 
     expect(eventPublisher.publishVideoProcessedFailed).not.toHaveBeenCalled();
+    expect(failureNotificationQueue.enqueueFinalFailure).not.toHaveBeenCalled();
   });
 
-  it('publishes final failed event after the third failed attempt', async () => {
+  it('enqueues final failure notification after the third failed attempt', async () => {
     const job = {
       ...createJob(['720p']),
       opts: { attempts: 3 },
       attemptsMade: 3,
     } as Job<VideoProcessingJobData>;
-    const { storageService, transcoderService, eventPublisher, configService } =
-      createMocks();
-    const processor = new VideoProcessor(
-      storageService,
-      transcoderService,
-      eventPublisher,
-      configService,
-    );
+    const mocks = createMocks();
+    const { eventPublisher, failureNotificationQueue } = mocks;
+    const processor = createProcessorWithFailureQueue(mocks);
 
     await (
       processor as unknown as {
@@ -370,10 +378,41 @@ describe('VideoProcessor', () => {
       }
     ).publishFinalFailureIfNeeded(job, new Error('ffmpeg failed'));
 
-    expect(eventPublisher.publishVideoProcessedFailed).toHaveBeenCalledWith({
+    expect(eventPublisher.publishVideoProcessedFailed).not.toHaveBeenCalled();
+    expect(failureNotificationQueue.enqueueFinalFailure).toHaveBeenCalledWith({
       videoId: 'video-123',
       traceId: 'trace-123',
       errorMessage: 'Video processing failed after 3 attempts: ffmpeg failed',
+      shouldPublishThumbnailFailed: false,
+    });
+  });
+
+  it('enqueues final failure notification with thumbnail failure when requested', async () => {
+    const job = {
+      ...createJob(['720p'], {
+        thumbnailTargetObjectKey: 'videos/video-123/thumbnails/default.jpg',
+      }),
+      opts: { attempts: 3 },
+      attemptsMade: 3,
+    } as Job<VideoProcessingJobData>;
+    const mocks = createMocks();
+    const { failureNotificationQueue } = mocks;
+    const processor = createProcessorWithFailureQueue(mocks);
+
+    await (
+      processor as unknown as {
+        publishFinalFailureIfNeeded: (
+          job: Job<VideoProcessingJobData>,
+          error: Error,
+        ) => Promise<void>;
+      }
+    ).publishFinalFailureIfNeeded(job, new Error('ffmpeg failed'));
+
+    expect(failureNotificationQueue.enqueueFinalFailure).toHaveBeenCalledWith({
+      videoId: 'video-123',
+      traceId: 'trace-123',
+      errorMessage: 'Video processing failed after 3 attempts: ffmpeg failed',
+      shouldPublishThumbnailFailed: true,
     });
   });
 

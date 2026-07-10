@@ -13,6 +13,7 @@ import {
 import { KafkaEventPublisher } from './infrastructure/messaging/kafka-event-publisher';
 import { MEDIA_EVENTS_CLIENT } from './infrastructure/messaging/media-events.constants';
 import { VideoProcessor } from './infrastructure/processors/video.processor';
+import { VideoProcessingFailureNotificationQueue } from './infrastructure/queue/video-processing-failure-notification.queue';
 import { FfmpegTranscoderService } from './infrastructure/services/ffmpeg-transcoder.service';
 import { MinioStorageService } from './infrastructure/storage/minio-storage.service';
 
@@ -53,6 +54,7 @@ import { MinioStorageService } from './infrastructure/storage/minio-storage.serv
     FfmpegTranscoderService,
     KafkaEventPublisher,
     MinioStorageService,
+    VideoProcessingFailureNotificationQueue,
     VideoProcessor,
   ],
   exports: [VideoProcessor],
